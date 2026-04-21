@@ -134,8 +134,6 @@ const getBadgeStyles = (val: string) => {
 };
 
 export default function App() {
-  const [accessKey, setAccessKey] = useState(localStorage.getItem('recruiter_os_key') || '');
-  const [inputKey, setInputKey] = useState('');
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
@@ -210,28 +208,9 @@ export default function App() {
     };
   });
 
-  const isAuthorized = useMemo(() => {
-    const requiredKey = import.meta.env.VITE_ACCESS_KEY;
-    if (!requiredKey) return true;
-    return accessKey === requiredKey;
-  }, [accessKey]);
-
   useEffect(() => {
-    if (isAuthorized) {
-      fetchForms();
-    }
-  }, [isAuthorized]);
-
-  const handleKeySubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const requiredKey = import.meta.env.VITE_ACCESS_KEY;
-    if (inputKey === requiredKey) {
-      setAccessKey(inputKey);
-      localStorage.setItem('recruiter_os_key', inputKey);
-    } else {
-      alert('Invalid Access Key');
-    }
-  };
+    fetchForms();
+  }, []);
 
   const fetchForms = async () => {
     try {
@@ -709,7 +688,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (selectedForm && isAuthorized) {
+    if (selectedForm) {
       const cached = localStorage.getItem(`cache_boosters_${selectedForm}`);
       if (cached) {
         setBoosters(JSON.parse(cached));
@@ -717,7 +696,7 @@ export default function App() {
       }
       fetchData(selectedForm);
     }
-  }, [selectedForm, isAuthorized]);
+  }, [selectedForm]);
 
   const updateStatus = async (id: string, status: Booster['status']) => {
     try {
@@ -829,43 +808,6 @@ export default function App() {
       ]
     }
   ];
-
-  if (!isAuthorized) {
-    return (
-      <div className="h-screen bg-[#0A0A0B] text-white flex items-center justify-center p-6">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-[#141416] p-10 border border-[#2D2D30] text-center"
-        >
-          <div className="font-serif italic text-3xl mb-2 text-[#D4AF37] tracking-wider">Recruiter.OS</div>
-          <p className="text-white/40 text-sm mb-10 font-serif lowercase italic">Booster Recruitment Management</p>
-          
-          <form onSubmit={handleKeySubmit} className="space-y-4">
-            <input 
-              type="password"
-              placeholder="Enter Access Key"
-              value={inputKey}
-              onChange={(e) => setInputKey(e.target.value)}
-              className="w-full bg-[#0A0A0B] border border-[#2D2D30] text-white px-4 py-3 outline-none focus:border-[#D4AF37] transition-colors rounded-sm text-center"
-              autoFocus
-            />
-            <button 
-              type="submit"
-              className="w-full bg-[#D4AF37] text-black font-bold py-3 rounded-sm hover:bg-[#B4942E] transition-colors uppercase tracking-widest text-xs"
-            >
-              Access System
-            </button>
-          </form>
-          
-          <div className="mt-8 pt-8 border-t border-white/5 space-y-2">
-             <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-bold">Confidential Enterprise System</p>
-             <p className="text-[9px] text-white/20">Authorization required to access Jotform recruitment pipelines.</p>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
 
   if (loading && !refreshing && !boosters.length) {
     return (

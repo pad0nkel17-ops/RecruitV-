@@ -27,6 +27,8 @@ export interface BoosterData {
   status: string;
   notes: string;
   contactStartedOn: string | null;
+  statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
+  crmAccount?: string;
   fieldOverrides?: Record<string, any>;
   updatedAt: string;
   fields?: Record<string, any>;
@@ -89,10 +91,17 @@ export const firebaseService = {
     await setDoc(doc(db, BOOSTER_DATA_COL, data.id), data);
   },
 
-  async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string) {
+  async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string, crmAccount?: string) {
     const ref = doc(db, BOOSTER_DATA_COL, id);
     const snap = await getDoc(ref);
     const now = new Date().toISOString();
+    
+    const historyEntry = {
+      status: status || 'WAITING FOR RECRUITMENT',
+      timestamp: now,
+      crmAccount
+    };
+
     if (!snap.exists()) {
       await setDoc(ref, {
         id,
@@ -100,12 +109,25 @@ export const firebaseService = {
         status: status || 'WAITING FOR RECRUITMENT',
         notes: notes || '',
         updatedAt: now,
-        contactStartedOn: null
+        contactStartedOn: null,
+        statusHistory: [historyEntry],
+        crmAccount
       });
     } else {
-      const updates: any = { updatedAt: now };
+      const currentData = snap.data() as BoosterData;
+      const history = currentData.statusHistory || [];
+      
+      const lastEntry = history[history.length - 1];
+      const shouldAddNewHistory = !lastEntry || lastEntry.status !== status;
+
+      const updates: any = { 
+        updatedAt: now,
+        statusHistory: shouldAddNewHistory ? [...history, historyEntry] : history
+      };
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;
+      if (crmAccount !== undefined) updates.crmAccount = crmAccount;
+      
       await updateDoc(ref, updates);
     }
   },

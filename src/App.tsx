@@ -31,11 +31,14 @@ import {
   X,
   Copy,
   Check,
+  Shield,
   ArrowDown,
   ArrowUp,
   ChevronLeft,
   ChevronRight,
-  Edit2
+  Edit2,
+  Zap,
+  PlusCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -66,6 +69,8 @@ interface Booster {
   region: string;
   status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE';
   statusUpdatedAt: string;
+  statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
+  crmAccount?: string;
   contactStartedOn: 'TELEGRAM' | 'DISCORD' | null;
   notes: string;
   formId: string;
@@ -87,12 +92,13 @@ const getNotificationLevel = (booster: Booster) => {
   if (booster.status === 'WAITING FOR RECRUITMENT') {
     const hoursWaiting = (now - updated) / (1000 * 60 * 60);
     if (hoursWaiting > 96) return 'URGENT';
-    if (hoursWaiting > 48) return 'WARNING';
+    if (hoursWaiting > 48) return 'STALE';
   }
   
   if (booster.status === 'RECRUITMENT IN PROCESS') {
     const hoursProcessing = (now - updated) / (1000 * 60 * 60);
-    if (hoursProcessing > 48) return 'WARNING';
+    if (hoursProcessing > 96) return 'URGENT';
+    if (hoursProcessing > 48) return 'STALE';
   }
 
   if (isNew) return 'NEW';
@@ -116,12 +122,25 @@ interface Jotform {
 }
 
 const STATUS_CONFIG = {
-  'WAITING FOR RECRUITMENT': { color: 'bg-blue-500/10 text-blue-400 border-blue-500/20', icon: Clock, funnelLabel: 'Waiting for recruitment' },
-  'RECRUITMENT IN PROCESS': { color: 'bg-amber-500/10 text-amber-400 border-amber-500/20', icon: RefreshCw, funnelLabel: 'Recruitment in process' },
-  'CRM ACCOUNT GIVEN': { color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20', icon: CheckCircle2, funnelLabel: 'CRM account given' },
-  'RECRUITED': { color: 'bg-[#D4AF37]/10 text-[#D4AF37] border-[#D4AF37]/20', icon: UserCheck, funnelLabel: 'Recruited' },
-  'LOST': { color: 'bg-rose-500/10 text-rose-400 border-rose-500/20', icon: UserMinus, funnelLabel: 'Lost' },
-  'RESERVE': { color: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20', icon: Users, funnelLabel: 'Reserve' },
+  'WAITING FOR RECRUITMENT': { color: 'bg-blue-500/10 text-blue-400 border-blue-500/20 shadow-[0_4px_12px_rgba(59,130,246,0.1)]', icon: Clock, funnelLabel: 'Waiting for recruitment' },
+  'RECRUITMENT IN PROCESS': { color: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20 shadow-[0_4px_12px_rgba(234,179,8,0.1)]', icon: RefreshCw, funnelLabel: 'Recruitment in process' },
+  'CRM ACCOUNT GIVEN': { color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_4px_12px_rgba(16,185,129,0.1)]', icon: CheckCircle2, funnelLabel: 'CRM account given' },
+  'RECRUITED': { color: 'bg-green-500/10 text-green-500 border-green-500/20 shadow-[0_4px_12px_rgba(34,197,94,0.1)]', icon: UserCheck, funnelLabel: 'Recruited' },
+  'LOST': { color: 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-[0_4px_12px_rgba(244,63,94,0.1)]', icon: UserMinus, funnelLabel: 'Lost' },
+  'RESERVE': { color: 'bg-pink-500/10 text-pink-400 border-pink-500/20 shadow-[0_4px_12px_rgba(236,72,153,0.1)]', icon: Users, funnelLabel: 'Reserve' },
+};
+
+const DB_COLORS = [
+  'text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-rose-400', 
+  'text-indigo-400', 'text-pink-400', 'text-cyan-400', 'text-orange-400'
+];
+
+const getDbColor = (id: string) => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return DB_COLORS[Math.abs(hash) % DB_COLORS.length];
 };
 
 const getBadgeStyles = (val: string) => {
@@ -133,16 +152,24 @@ const getBadgeStyles = (val: string) => {
   return "bg-white/5 text-white/90 border-white/10";
 };
 
+interface DbSummary {
+  urgent: number;
+  stale: number;
+  new: number;
+  total: number;
+}
+
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
   const [selectedForm, setSelectedForm] = useState<string>('');
+  const [dashboardMode, setDashboardMode] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingFormId, setEditingFormId] = useState<string | null>(null);
   const [editingFormTitle, setEditingFormTitle] = useState('');
-  const [dbNotificationCounts, setDbNotificationCounts] = useState<Record<string, number>>({});
+  const [dbSummaries, setDbSummaries] = useState<Record<string, DbSummary>>({});
   const [search, setSearch] = useState('');
   const [gameFilter, setGameFilter] = useState('');
   const [firebaseStatus, setFirebaseStatus] = useState<'CONNECTING' | 'ONLINE' | 'OFFLINE'>('CONNECTING');
@@ -166,6 +193,7 @@ export default function App() {
     const saved = localStorage.getItem('pageSize');
     return saved ? parseInt(saved, 10) : 0; // 0 for ALL
   });
+  const [selectedBoosterIds, setSelectedBoosterIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
@@ -213,6 +241,44 @@ export default function App() {
   useEffect(() => {
     fetchForms();
   }, []);
+
+  // Background fetch summaries for all forms
+  useEffect(() => {
+    if (forms.length > 0) {
+      const loadSummaries = async () => {
+        const summaries: Record<string, DbSummary> = {};
+        await Promise.all(forms.map(async (form) => {
+           try {
+             const cachedVal = localStorage.getItem(`cache_boosters_${form.id}`);
+             let data: Booster[] = [];
+             if (cachedVal) {
+               data = JSON.parse(cachedVal);
+             } else {
+               const fbData = await firebaseService.getBoosterData(form.id);
+               data = fbData.map(d => ({
+                 id: d.id,
+                 createdAt: d.updatedAt,
+                 status: d.status as any,
+                 statusUpdatedAt: d.updatedAt,
+                 fields: d.fields || {}
+               } as Booster));
+             }
+             
+             summaries[form.id] = {
+               urgent: data.filter(b => getNotificationLevel(b) === 'URGENT').length,
+               stale: data.filter(b => getNotificationLevel(b) === 'STALE').length,
+               new: data.filter(b => getNotificationLevel(b) === 'NEW').length,
+               total: data.length
+             };
+           } catch (e) {
+             console.error(`Failed to load summary for ${form.id}`);
+           }
+        }));
+        setDbSummaries(prev => ({ ...prev, ...summaries }));
+      };
+      loadSummaries();
+    }
+  }, [forms]);
 
   const fetchForms = async () => {
     try {
@@ -552,6 +618,8 @@ export default function App() {
           region: d.fields?.region || '',
           status: d.status as any,
           statusUpdatedAt: d.updatedAt,
+          statusHistory: d.statusHistory || [],
+          crmAccount: d.crmAccount || '',
           contactStartedOn: d.contactStartedOn as any,
           notes: d.notes,
           formId: d.formId,
@@ -596,6 +664,8 @@ export default function App() {
             region: getVal('region'),
             status: (persist?.status || 'WAITING FOR RECRUITMENT') as any,
             statusUpdatedAt: persist?.updatedAt || sub.created_at,
+            statusHistory: persist?.statusHistory || [],
+            crmAccount: persist?.crmAccount || '',
             contactStartedOn: (persist?.contactStartedOn || null) as any,
             notes: persist?.notes || '',
             formId: idToFetch,
@@ -613,9 +683,14 @@ export default function App() {
       localStorage.setItem(`cache_time_${idToFetch}`, new Date().toISOString());
 
       // Update summary counts
-      const counts: Record<string, number> = { ...dbNotificationCounts };
-      counts[idToFetch] = merged.filter(b => getNotificationLevel(b)).length;
-      setDbNotificationCounts(counts);
+      const summaries = { ...dbSummaries };
+      summaries[idToFetch] = {
+        urgent: merged.filter(b => getNotificationLevel(b) === 'URGENT').length,
+        stale: merged.filter(b => getNotificationLevel(b) === 'STALE').length,
+        new: merged.filter(b => getNotificationLevel(b) === 'NEW').length,
+        total: merged.length
+      };
+      setDbSummaries(summaries);
 
     } catch (err: any) {
       setError(err.message || 'Failed to connect to API.');
@@ -749,16 +824,78 @@ export default function App() {
     }
   }, [selectedForm]);
 
-  const updateStatus = async (id: string, status: Booster['status']) => {
+  const [crmPrompt, setCrmPrompt] = useState<{ ids: string[]; status: Booster['status'] } | null>(null);
+  const [tempCrmName, setTempCrmName] = useState('');
+
+  const updateStatus = async (id: string, status: Booster['status'], crmAccount?: string) => {
+    if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
+      setCrmPrompt({ ids: [id], status });
+      setTempCrmName('');
+      return;
+    }
     try {
-      await firebaseService.updateBoosterStatus(id, selectedForm, status);
+      await firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount);
       setBoosters(prev => prev.map(b => b.id === id ? { 
         ...b, 
         status, 
-        statusUpdatedAt: new Date().toISOString() 
+        crmAccount: crmAccount || b.crmAccount,
+        statusUpdatedAt: new Date().toISOString(),
+        statusHistory: [
+          ...(b.statusHistory || []),
+          { status, timestamp: new Date().toISOString(), crmAccount }
+        ]
       } : b));
     } catch (err) {
       console.error('Failed to update status');
+    }
+  };
+
+  const bulkUpdateStatus = async (status: Booster['status'], crmAccount?: string) => {
+    if (selectedBoosterIds.size === 0 || !selectedForm) return;
+    
+    if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
+      setCrmPrompt({ ids: Array.from(selectedBoosterIds), status });
+      setTempCrmName('');
+      return;
+    }
+
+    try {
+      setRefreshing(true);
+      await Promise.all(
+        Array.from(selectedBoosterIds).map(id => firebaseService.updateBoosterStatus(id as string, selectedForm, status, undefined, crmAccount))
+      );
+      setBoosters(prev => prev.map(b => selectedBoosterIds.has(b.id) ? {
+        ...b,
+        status,
+        crmAccount: crmAccount || b.crmAccount,
+        statusUpdatedAt: new Date().toISOString(),
+        statusHistory: [
+          ...(b.statusHistory || []),
+          { status, timestamp: new Date().toISOString(), crmAccount }
+        ]
+      } : b));
+      setSelectedBoosterIds(new Set());
+    } catch (err) {
+      console.error('Failed to bulk update status');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const toggleBoosterSelection = (id: string) => {
+    setSelectedBoosterIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllFiltered = () => {
+    if (selectedBoosterIds.size === filteredBoosters.length) {
+      setSelectedBoosterIds(new Set());
+    } else {
+      setSelectedBoosterIds(new Set(filteredBoosters.map(b => b.id)));
     }
   };
 
@@ -848,14 +985,14 @@ export default function App() {
 
   const sidebarGroups = [
     {
-      label: 'Recruitment Funnel',
+      label: 'Recruitment Status',
       items: [
-        { label: 'Waiting for recruitment', value: 'WAITING FOR RECRUITMENT', icon: Clock },
-        { label: 'Recruitment in process', value: 'RECRUITMENT IN PROCESS', icon: RefreshCw },
-        { label: 'CRM account given', value: 'CRM ACCOUNT GIVEN', icon: CheckCircle2 },
-        { label: 'Recruited', value: 'RECRUITED', icon: UserCheck },
-        { label: 'Lost', value: 'LOST', icon: UserMinus },
-        { label: 'Reserve', value: 'RESERVE', icon: Users },
+        { label: 'All Applications', value: 'ALL', icon: Shield },
+        ...Object.entries(STATUS_CONFIG).map(([key, cfg]) => ({
+          label: cfg.funnelLabel,
+          value: key,
+          icon: cfg.icon
+        }))
       ]
     }
   ];
@@ -894,7 +1031,15 @@ export default function App() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-[#0A0A0B] selection-accent relative">
-      {/* Mobile Sidebar Overlay */}
+      {/* Background Aesthetic */}
+      <div className="fixed inset-0 z-0 pointer-events-none opacity-30">
+        <div className="absolute inset-0 bg-gradient-to-br from-[#141416] via-[#0A0A0B] to-[#141416]" />
+        <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] bg-[#D4AF37]/5 blur-[150px] rounded-full" />
+        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] bg-[#3B82F6]/5 blur-[150px] rounded-full" />
+      </div>
+
+      <div className="relative z-10 flex w-full">
+        {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
           <motion.div 
@@ -909,28 +1054,52 @@ export default function App() {
 
       {/* Sidebar */}
       <nav className={cn(
-        "fixed inset-y-0 left-0 z-50 w-64 bg-[#141416] border-r border-[#2D2D30] flex flex-col p-6 transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 overflow-y-auto overflow-x-hidden",
+        "fixed inset-y-0 left-0 z-50 w-72 bg-[#141416] border-r border-[#2D2D30] flex flex-col p-6 transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 overflow-y-auto overflow-x-hidden shadow-[10px_0_30px_rgba(0,0,0,0.3)]",
         isSidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
-        <div className="font-serif italic text-xl mb-10 text-[#D4AF37] tracking-wider flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Layout className="w-5 h-5" />
+        <div className="font-serif italic text-2xl mb-10 text-[#D4AF37] tracking-wider flex items-center justify-between">
+          <div 
+            className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
+            onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
+          >
+            <Layout className="w-6 h-6 shadow-[0_0_15px_rgba(212,175,55,0.3)]" />
             Recruiter.OS
           </div>
-          <div className="flex items-center gap-2">
-            <RefreshCw 
-              className={cn("w-3 h-3 cursor-pointer opacity-50 hover:opacity-100", refreshing && "animate-spin")} 
-              onClick={() => { fetchForms(); fetchData(); }}
-            />
-            <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}>
-              <X className="w-4 h-4 text-[#94949E]" />
-            </button>
+          <div className="flex items-center gap-3">
+             <RefreshCw 
+               className={cn("w-3.5 h-3.5 cursor-pointer opacity-50 hover:opacity-100 transition-all", refreshing && "animate-spin")} 
+               onClick={() => { fetchForms(); fetchData(); }}
+             />
+             <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}>
+               <X className="w-5 h-5 text-[#94949E]" />
+             </button>
           </div>
         </div>
 
+        <button
+          onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
+          className={cn(
+            "w-full flex items-center justify-between p-4 rounded-2xl mb-8 transition-all group shadow-lg",
+            dashboardMode ? "bg-white/[0.05] ring-2 ring-[#D4AF37]/30" : "hover:bg-white/[0.02]"
+          )}
+        >
+          <div className="flex items-center gap-3">
+             <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/10 flex items-center justify-center border border-[#D4AF37]/20 group-hover:bg-[#D4AF37]/20 transition-all">
+                <Globe className="w-5 h-5 text-[#D4AF37]" />
+             </div>
+             <div className="flex flex-col items-start">
+                <span className="text-xs font-bold text-white tracking-widest uppercase">Global Dashboard</span>
+                <span className="text-[9px] text-white/40 uppercase tracking-tighter">System Overview</span>
+             </div>
+          </div>
+          {dashboardMode && (
+            <div className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_#D4AF37]" />
+          )}
+        </button>
+
         {/* Form Selection */}
         <div className="mb-8">
-          <div className="flex items-center justify-between mb-3 border-b border-[#2D2D30] pb-2">
+          <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-2">
              <span className="text-[10px] uppercase tracking-widest text-white/90">
               Databases
             </span>
@@ -946,34 +1115,24 @@ export default function App() {
           
           <div className="space-y-1">
             {forms.map((form) => {
-              // Calculate notification count for this specific database
-              // Since we don't have all boosters for all forms at once (we fetch per form)
-              // This is tricky. However, the user request implies showing it.
-              // If we only have data for the CURRENT form, we can only show it for the current one accurately.
-              // But maybe we should fetch counts for all? 
-              // A better approach is to store the counts in the forms list or just show it for the active one.
-              // Given the constraints and existing architecture, I'll calculate it for the active one, 
-              // but I should probably implement a background fetch or a more comprehensive API if I want it for all.
-              // Wait, the user said "number on each database". This usually means a summary.
-              
-              const isSelected = selectedForm === form.id;
-              // Use the summary data if available, fallback to 0
-              const notificationCount = dbNotificationCounts[form.id] || (isSelected ? boosters.filter(b => getNotificationLevel(b)).length : 0);
+              const isSelected = selectedForm === form.id && !dashboardMode;
+              const summary = dbSummaries[form.id];
+              const colorClass = getDbColor(form.id);
 
               return (
                 <div 
                   key={form.id} 
                   className={cn(
-                    "group flex flex-col gap-1 px-3 py-2 rounded-sm transition-all cursor-pointer",
-                    isSelected ? "bg-[#D4AF37]/10 border-l-2 border-[#D4AF37]" : "hover:bg-white/5"
+                    "group flex flex-col gap-2 px-4 py-3.5 rounded-2xl transition-all cursor-pointer shadow-lg",
+                    isSelected ? "bg-[#141416] ring-2 ring-[#D4AF37]/50 shadow-[0_10px_30px_rgba(0,0,0,0.4)]" : "hover:bg-white/[0.03] active:scale-98"
                   )}
-                  onClick={() => setSelectedForm(form.id)}
+                  onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); }}
                 >
-                  <div className="flex items-center justify-between gap-2 overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 overflow-hidden">
                     {editingFormId === form.id ? (
                       <input
                         autoFocus
-                        className="bg-[#0A0A0B] border border-[#D4AF37] text-[11px] px-1 py-0.5 outline-none w-full text-white"
+                        className="bg-[#0A0A0B] border border-[#D4AF37] text-[11px] px-3 py-1.5 outline-none w-full text-white rounded-lg shadow-inner"
                         value={editingFormTitle}
                         onChange={(e) => setEditingFormTitle(e.target.value)}
                         onBlur={() => renameForm(form.id, editingFormTitle)}
@@ -981,20 +1140,24 @@ export default function App() {
                         onClick={(e) => e.stopPropagation()}
                       />
                     ) : (
-                      <span className={cn(
-                        "truncate text-[11px] font-bold uppercase",
-                        isSelected ? "text-[#D4AF37]" : "text-white/90 group-hover:text-white",
-                        form.id.startsWith('local_') && "text-[#4ADE80]"
-                      )}>
-                        {form.title}
-                      </span>
+                      <div className="flex items-center gap-2 overflow-hidden flex-1">
+                        <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isSelected ? colorClass.replace('text-', 'bg-') : "bg-white/20")} />
+                        <span className={cn(
+                          "truncate text-[11px] font-bold uppercase tracking-widest",
+                          isSelected ? colorClass : "text-white/60 group-hover:text-white"
+                        )} title={form.title}>
+                          {form.title}
+                        </span>
+                      </div>
                     )}
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {notificationCount > 0 && isSelected && (
-                        <span className="flex items-center justify-center bg-rose-500 text-white text-[8px] font-bold px-1 rounded-full min-w-[14px]">
-                          {notificationCount}
-                        </span>
+                      {summary && (
+                        <div className="flex items-center gap-1">
+                          {summary.urgent > 0 && <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_5px_#F43F5E]" />}
+                          {summary.stale > 0 && <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_5px_#F59E0B]" />}
+                          {summary.new > 0 && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_5px_#3B82F6]" />}
+                        </div>
                       )}
                       
                       <button
@@ -1007,30 +1170,21 @@ export default function App() {
                       >
                         <Edit2 className="w-2.5 h-2.5" />
                       </button>
-
-                      <div className="flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); reorderForms(form.id, 'UP'); }}
-                          className="hover:text-[#D4AF37] p-0.5"
-                        >
-                          <ChevronUp className="w-2.5 h-2.5" />
-                        </button>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); reorderForms(form.id, 'DOWN'); }}
-                          className="hover:text-[#D4AF37] p-0.5"
-                        >
-                          <ChevronDown className="w-2.5 h-2.5" />
-                        </button>
-                      </div>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); deleteForm(form.id); }}
-                        className="opacity-0 group-hover:opacity-100 hover:text-rose-500 transition-opacity p-1"
-                        title="Hide Form"
-                      >
-                        <EyeOff className="w-3 h-3" />
-                      </button>
                     </div>
                   </div>
+                  
+                  {summary && (
+                    <div className="flex items-center gap-2 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                       <div className="flex items-center gap-1 text-[8px] font-bold tracking-tighter">
+                          <span className="text-rose-500">{summary.urgent}U</span>
+                          <span className="text-white/20">|</span>
+                          <span className="text-amber-500">{summary.stale}S</span>
+                          <span className="text-white/20">|</span>
+                          <span className="text-blue-500">{summary.new}N</span>
+                       </div>
+                       <span className="text-[8px] text-white/20 uppercase tracking-widest ml-auto">Total: {summary.total}</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1117,29 +1271,29 @@ export default function App() {
                 return (
                   <button
                     key={item.value}
-                    onClick={() => setActiveTab(item.value)}
+                    onClick={() => { setActiveTab(item.value); setSelectedBoosterIds(new Set()); }}
                     className={cn(
-                      "w-auto min-w-full flex items-center justify-between gap-3 px-3 py-2 rounded-sm text-sm transition-all group/tab relative",
-                      isActive ? "bg-[#D4AF37]/5 text-white border-r-2 border-[#D4AF37]" : "text-white/70 hover:text-[#D4AF37] hover:bg-white/[0.02]"
+                      "w-auto min-w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-all group/tab relative shadow-sm",
+                      isActive ? "bg-white/[0.04] text-white ring-1 ring-white/10" : "text-white/50 hover:text-white hover:bg-white/[0.02]"
                     )}
                   >
                     <div className="flex items-center gap-3">
-                      <item.icon className={cn("w-4 h-4", isActive ? "text-[#D4AF37]" : "opacity-50")} />
-                      <div className="flex flex-col items-start translate-y-[1px]">
-                        <span className="leading-none">{item.label}</span>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className={cn("text-[11px] font-mono", isActive ? "text-[#D4AF37]" : "text-white/30")}>
+                      <item.icon className={cn("w-4 h-4 transition-colors", isActive ? "text-[#D4AF37]" : "opacity-30 group-hover:opacity-70 dark:group-hover:text-[#D4AF37]")} />
+                      <div className="flex flex-col items-start">
+                        <span className="leading-tight font-medium tracking-tight whitespace-nowrap">{item.label}</span>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={cn("text-[10px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/20 group-hover:text-white/40")}>
                             {count.toString().padStart(2, '0')}
                           </span>
-                          {notificationLevelCount > 0 && (
-                             <span className="flex items-center gap-0.5 px-1 rounded-full bg-rose-500/10 border border-rose-500/20">
-                               <AlertCircle className="w-2 h-2 text-rose-500" />
-                               <span className="text-[8px] font-bold text-rose-500">{notificationLevelCount}</span>
-                             </span>
-                          )}
                         </div>
                       </div>
                     </div>
+                    {isActive && (
+                       <motion.div 
+                         layoutId="activeTabIndicator"
+                         className="absolute right-3 w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.5)]"
+                       />
+                    )}
                   </button>
                 );
               })}
@@ -1179,21 +1333,21 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#0A0A0B]">
         {error && (
-          <div className="bg-rose-500/10 border-b border-rose-500/20 px-10 py-3 flex items-center justify-between gap-4 animate-in slide-in-from-top duration-300">
+          <div className="mx-10 mt-6 bg-rose-500/10 border border-rose-500/20 px-6 py-3 shrink-0 rounded-xl flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center gap-3 text-rose-400 text-xs">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span className="font-medium tracking-wide font-serif italic">{error}</span>
             </div>
             <button 
               onClick={() => setError(null)}
-              className="text-rose-400/50 hover:text-rose-400 transition-colors"
+              className="text-rose-400/50 hover:text-rose-400 transition-colors bg-white/5 p-1 rounded-full"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
-        <header className="h-20 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-10 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-sm z-10 gap-4 sm:gap-0 py-4 sm:py-0">
+        <header className="h-20 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-10 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-md z-30 gap-4 sm:gap-0 py-4 sm:py-0">
           <div className="flex items-center gap-3 text-[13px] text-white/90 w-full sm:w-auto">
             <button 
               onClick={() => setIsSidebarOpen(true)}
@@ -1203,29 +1357,29 @@ export default function App() {
             </button>
             <div className="w-2 h-2 bg-[#4ADE80] rounded-full shadow-[0_0_8px_#4ADE80] hidden xs:block" />
             <span className="truncate max-w-[200px] xs:max-w-none">
-              {forms.find(f => f.id === selectedForm)?.title || 'Database Initializing...'}
+              {dashboardMode ? 'Global Dashboard Overview' : (forms.find(f => f.id === selectedForm)?.title || 'Database Initializing...')}
             </span>
           </div>
 
           <div className="flex items-center gap-3 sm:gap-6 w-full sm:w-auto overflow-x-auto sm:overflow-visible no-scrollbar pb-2 sm:pb-0">
-            <div className="flex items-center gap-2 sm:gap-3 bg-[#141416] p-1 sm:p-1.5 rounded border border-[#2D2D30] flex-shrink-0">
-              <div className="hidden md:flex items-center gap-2 px-2 border-r border-[#2D2D30]">
+            <div className="flex items-center gap-2 sm:gap-3 bg-[#141416] p-1.5 rounded-xl border border-[#2D2D30] flex-shrink-0 shadow-inner">
+              <div className="hidden md:flex items-center gap-2 px-3 border-r border-[#2D2D30]">
                 <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span className="text-[10px] text-white/80 uppercase tracking-tighter whitespace-nowrap">Filter Range</span>
+                <span className="text-[10px] text-white/50 uppercase tracking-[0.1em] font-bold whitespace-nowrap">Range</span>
               </div>
-              <div className="flex items-center gap-1 sm:gap-2 px-1 sm:px-2">
+              <div className="flex items-center gap-2 px-2">
                 <input 
                   type="date" 
                   value={dateRange.start}
                   onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                  className="bg-transparent text-[9px] sm:text-[10px] text-white outline-none [color-scheme:dark] w-[100px] sm:w-auto"
+                  className="bg-transparent text-[10px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0"
                 />
-                <span className="text-white/40 text-[10px]">—</span>
+                <span className="text-white/20 text-[10px] select-none">—</span>
                 <input 
                   type="date" 
                   value={dateRange.end}
                   onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                  className="bg-transparent text-[9px] sm:text-[10px] text-white outline-none [color-scheme:dark] w-[100px] sm:w-auto"
+                  className="bg-transparent text-[10px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0"
                 />
                 {(dateRange.start || dateRange.end) && (
                   <button 
@@ -1277,17 +1431,131 @@ export default function App() {
               <button 
                 onClick={() => fetchData()}
                 disabled={refreshing}
-                className="p-2 sm:px-4 sm:py-1.5 border border-[#D4AF37] text-[#D4AF37] text-[11px] uppercase tracking-widest rounded hover:bg-[#D4AF37]/5 transition-colors disabled:opacity-50"
+                className="p-2 sm:px-6 sm:py-2 bg-white/5 border border-white/10 text-white text-[10px] font-bold uppercase tracking-[0.2em] rounded-xl hover:bg-white/10 hover:border-white/20 transition-all disabled:opacity-50 flex items-center gap-2 shadow-sm active:scale-95"
                 title="Manual Sync"
               >
-                {refreshing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <span className="hidden sm:inline">Manual Fetch</span>}
-                {!refreshing && <RefreshCw className="w-3.5 h-3.5 sm:hidden" />}
+                {refreshing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                <span className="hidden sm:inline">Refresh</span>
               </button>
             </div>
           </div>
         </header>
 
         <div className="flex-1 overflow-y-auto px-4 sm:px-10 py-6 sm:py-10 relative">
+          {dashboardMode ? (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-12"
+            >
+              <div className="flex flex-col gap-2">
+                <h1 className="font-serif italic text-5xl text-white tracking-tight">System Dashboard</h1>
+                <p className="text-xs text-white/40 uppercase tracking-[0.4em] font-bold">Global Recruitment Overview</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                {forms.map(form => {
+                  const summary = dbSummaries[form.id];
+                  const colorClass = getDbColor(form.id);
+                  return (
+                    <motion.div
+                      key={form.id}
+                      whileHover={{ y: -5, scale: 1.02 }}
+                      onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); fetchData(form.id); }}
+                      className="bg-white/[0.02] border border-white/10 rounded-3xl p-8 cursor-pointer group transition-all hover:bg-white/[0.05] hover:border-[#D4AF37]/30 shadow-2xl relative overflow-hidden"
+                    >
+                      <div className={cn("absolute top-0 left-0 w-1.5 h-full opacity-50 transition-all group-hover:opacity-100", colorClass.replace('text-', 'bg-'))} />
+                      
+                      <div className="flex flex-col h-full">
+                        <div className="flex items-start justify-between mb-8">
+                          <div className="flex flex-col gap-1">
+                             <h3 className={cn("text-xl font-black uppercase tracking-[0.2em] transition-colors leading-tight break-words", colorClass)}>
+                               {form.title}
+                             </h3>
+                             <p className="text-[10px] text-white/30 uppercase font-mono tracking-tighter">Endpoint: {form.id}</p>
+                          </div>
+                          <div className="p-3 rounded-2xl bg-white/5 border border-white/5 text-white/40 group-hover:text-[#D4AF37] group-hover:bg-[#D4AF37]/10 transition-all">
+                             <ExternalLink className="w-5 h-5" />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-4 mb-8">
+                           <div className="flex flex-col gap-1 p-3 bg-rose-500/5 border border-rose-500/10 rounded-2xl text-center">
+                              <span className="text-2xl font-black text-rose-500">{summary?.urgent || 0}</span>
+                              <span className="text-[8px] text-rose-500/50 uppercase font-bold tracking-widest">Urgent</span>
+                           </div>
+                           <div className="flex flex-col gap-1 p-3 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-center">
+                              <span className="text-2xl font-black text-amber-500">{summary?.stale || 0}</span>
+                              <span className="text-[8px] text-amber-500/50 uppercase font-bold tracking-widest">Stale</span>
+                           </div>
+                           <div className="flex flex-col gap-1 p-3 bg-blue-500/5 border border-blue-500/10 rounded-2xl text-center">
+                              <span className="text-2xl font-black text-blue-400">{summary?.new || 0}</span>
+                              <span className="text-[8px] text-blue-400/50 uppercase font-bold tracking-widest">New</span>
+                           </div>
+                        </div>
+
+                        <div className="mt-auto flex items-center justify-between pt-6 border-t border-white/5">
+                           <div className="flex flex-col">
+                              <span className="text-[10px] text-white/30 uppercase font-bold tracking-widest">Total Records</span>
+                              <span className="text-lg font-black text-white">{summary?.total || 0}</span>
+                           </div>
+                           <div className="px-4 py-2 bg-white/5 rounded-xl text-[10px] uppercase font-bold tracking-widest text-[#D4AF37] opacity-0 group-hover:opacity-100 transition-all">
+                              View Database
+                           </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          ) : (
+            <React.Fragment>
+          <AnimatePresence>
+            {selectedBoosterIds.size > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 100 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 100 }}
+                className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] bg-[#141416]/95 backdrop-blur-xl border border-[#2D2D30] p-4 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center gap-6"
+              >
+                <div className="flex items-center gap-3 pr-6 border-r border-[#2D2D30]">
+                  <div className="w-8 h-8 rounded-lg bg-[#D4AF37] flex items-center justify-center text-black font-bold">
+                    {selectedBoosterIds.size}
+                  </div>
+                  <span className="text-xs text-white/90 font-serif italic whitespace-nowrap">Records Selected</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-white/40 uppercase tracking-widest mr-2 ml-2">Move to:</span>
+                  {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => {
+                    const cfg = STATUS_CONFIG[status];
+                    return (
+                      <button
+                        key={status}
+                        onClick={() => bulkUpdateStatus(status)}
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all hover:scale-105 active:scale-95 shadow-md",
+                          cfg.color
+                        )}
+                      >
+                        <cfg.icon className="w-3 h-3" />
+                        {cfg.funnelLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <button 
+                  onClick={() => setSelectedBoosterIds(new Set())}
+                  className="p-2 text-white/40 hover:text-white transition-colors ml-4"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <AnimatePresence>
             {settingsOpen && (
               <motion.div 
@@ -1345,14 +1613,14 @@ export default function App() {
                   {configTab === 'FIELDS' ? (
                     <div className="space-y-6">
                       <div className="space-y-2">
-                        <p className="text-[10px] text-white/80 uppercase italic">1. Select Recruitment Funnel context</p>
+                        <p className="text-[10px] text-white/80 uppercase italic">1. Select Recruitment Status context</p>
                         <div className="flex flex-wrap gap-1">
                           {['ALL', ...Object.keys(STATUS_CONFIG)].map(status => (
                             <button
                               key={status}
                               onClick={() => setConfigStatus(status)}
                               className={cn(
-                                "px-2 py-1 text-[9px] uppercase tracking-widest rounded-sm border transition-all",
+                                "px-2 py-1 text-[9px] uppercase tracking-widest rounded-lg border transition-all",
                                 configStatus === status 
                                   ? "bg-[#D4AF37]/20 border-[#D4AF37] text-[#D4AF37]" 
                                   : "bg-transparent border-[#2D2D30] text-white/80 hover:border-[#D4AF37]/30"
@@ -1485,7 +1753,7 @@ export default function App() {
           )}
 
           {(() => {
-            const urgentBoosters = boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'WARNING').slice(0, 3);
+            const urgentBoosters = boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'STALE').slice(0, 3);
             if (urgentBoosters.length === 0) return null;
             return (
               <motion.div 
@@ -1505,9 +1773,9 @@ export default function App() {
                       <span className="text-rose-400 font-bold ml-1">{getNotificationLevel(b)}</span>
                     </div>
                   ))}
-                  {boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'WARNING').length > 3 && (
+                  {boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'STALE').length > 3 && (
                     <div className="text-[9px] text-white/40 flex items-center italic">
-                      + {boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'WARNING').length - 3} more...
+                      + {boosters.filter(b => getNotificationLevel(b) === 'URGENT' || getNotificationLevel(b) === 'STALE').length - 3} more...
                     </div>
                   )}
                 </div>
@@ -1515,103 +1783,131 @@ export default function App() {
             );
           })()}
 
-          <div className="flex items-end justify-between mb-8">
-            <div className="flex flex-col gap-1">
-              <h2 className="font-serif italic text-3xl text-[#E1E1E6]">
-                {forms.find(f => f.id === selectedForm)?.title || 'Database'}
-              </h2>
-              <div className="flex items-center gap-3">
-                <p className="text-[10px] text-white/60 font-mono uppercase tracking-[0.2em]">
-                  {activeTab === 'ALL' ? 'Complete Records' : activeTab}
-                </p>
-                {/* Notification Summary */}
-                {(() => {
-                  const urgent = boosters.filter(b => getNotificationLevel(b) === 'URGENT').length;
-                  const warning = boosters.filter(b => getNotificationLevel(b) === 'WARNING').length;
-                  const fresh = boosters.filter(b => getNotificationLevel(b) === 'NEW').length;
-                  if (!urgent && !warning && !fresh) return null;
-                  return (
-                    <div className="flex items-center gap-3">
-                      <span className="text-[9px] text-white/40 uppercase tracking-widest font-mono">Notifications</span>
-                      <div className="flex items-center gap-2">
-                        {urgent > 0 && (
-                          <span className="flex items-center gap-1.5 text-[9px] text-rose-500 font-bold bg-rose-500/5 px-2 py-0.5 rounded-full border border-rose-500/20">
-                            <div className="w-1 h-1 rounded-full bg-rose-500 animate-pulse" />
-                            {urgent} URGENT
-                          </span>
-                        )}
-                        {warning > 0 && (
-                          <span className="flex items-center gap-1.5 text-[9px] text-amber-500 font-bold bg-amber-500/5 px-2 py-0.5 rounded-full border border-amber-500/20">
-                            <div className="w-1 h-1 rounded-full bg-amber-500" />
-                            {warning} STALE
-                          </span>
-                        )}
-                        {fresh > 0 && (
-                          <span className="flex items-center gap-1.5 text-[9px] text-blue-400 font-bold bg-blue-500/5 px-2 py-0.5 rounded-full border border-blue-500/20">
-                            <div className="w-1 h-1 rounded-full bg-blue-400" />
-                            {fresh} NEW
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
+          <div className="mb-10">
+            <div className="flex flex-col gap-2 mb-8">
+              <h1 className="font-serif italic text-5xl text-[#E1E1E6] tracking-tight">
+                {forms.find(f => f.id === selectedForm)?.title || 'Recruitment Database'}
+              </h1>
+              <p className="text-xs text-white/40 uppercase tracking-[0.4em] font-bold">Booster Application Management System</p>
+            </div>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-white/[0.03] border border-white/5 rounded-[1.5rem] w-fit overflow-x-auto no-scrollbar shadow-inner">
+                <button
+                  onClick={() => setActiveTab('ALL')}
+                  className={cn(
+                    "px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                    activeTab === 'ALL' 
+                      ? "bg-[#D4AF37] text-black shadow-[0_5px_15px_rgba(212,175,55,0.4)] scale-105" 
+                      : "text-white/40 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  All Entries
+                </button>
+                {(Object.keys(STATUS_CONFIG) as (keyof typeof STATUS_CONFIG)[]).map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => setActiveTab(status)}
+                    className={cn(
+                      "px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                      activeTab === status 
+                        ? "bg-[#D4AF37] text-black shadow-[0_5px_15px_rgba(212,175,55,0.4)] scale-105" 
+                        : "text-white/40 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    {STATUS_CONFIG[status].funnelLabel}
+                  </button>
+                ))}
+              </div>
+
+              {/* Enhanced Notification Summary for Database View */}
+              <div className="flex items-center gap-4 bg-[#141416]/50 border border-white/5 px-6 py-3 rounded-3xl backdrop-blur-xl">
+                 <div className="flex items-center gap-2 pr-4 border-r border-white/5">
+                   <Layout className="w-3.5 h-3.5 text-[#D4AF37]" />
+                   <span className="text-[10px] font-black text-white/50 uppercase tracking-widest">Pool Status</span>
+                 </div>
+                 {(() => {
+                   const urgent = boosters.filter(b => getNotificationLevel(b) === 'URGENT').length;
+                   const stale = boosters.filter(b => getNotificationLevel(b) === 'STALE').length;
+                   const fresh = boosters.filter(b => getNotificationLevel(b) === 'NEW').length;
+                   return (
+                     <div className="flex items-center gap-3">
+                       <div className="flex items-center gap-1.5">
+                         <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] animate-pulse" />
+                         <span className="text-[10px] font-black text-rose-500 font-mono">{urgent} URGENT</span>
+                       </div>
+                       <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
+                         <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_#F59E0B]" />
+                         <span className="text-[10px] font-black text-amber-500 font-mono">{stale} STALE</span>
+                       </div>
+                       <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
+                         <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_#60A5FA]" />
+                         <span className="text-[10px] font-black text-blue-400 font-mono">{fresh} NEW</span>
+                       </div>
+                     </div>
+                   );
+                 })()}
               </div>
             </div>
+          </div>
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 bg-[#141416] border border-[#2D2D30] rounded-sm px-2 py-1">
-                <span className="text-[9px] text-white/40 uppercase font-mono">Show:</span>
+              <div className="flex items-center gap-2 bg-[#141416] border border-[#2D2D30] rounded-xl px-3 py-1.5 shadow-inner">
+                <span className="text-[9px] text-white/40 uppercase font-bold tracking-wider">Show:</span>
                 {[10, 50, 0].map(size => (
                   <button
                     key={size}
                     onClick={() => setPageSize(size)}
                     className={cn(
-                      "text-[9px] font-bold px-1.5 py-0.5 rounded-sm transition-colors",
-                      pageSize === size ? "bg-[#D4AF37] text-black" : "text-white/60 hover:text-white"
+                      "text-[9px] font-bold px-2 py-0.5 rounded-lg transition-all",
+                      pageSize === size ? "bg-[#D4AF37] text-black shadow-lg" : "text-white/40 hover:text-white"
                     )}
                   >
                     {size === 0 ? 'ALL' : size}
                   </button>
                 ))}
               </div>
-              <span className="text-xs text-white/60 pb-1">
-                Showing {pageSize === 0 ? filteredBoosters.length : Math.min(pageSize, filteredBoosters.length)} of {filteredBoosters.length} active records
+              <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest bg-white/[0.02] px-3 py-1.5 rounded-xl border border-white/5">
+                {pageSize === 0 ? filteredBoosters.length : Math.min(pageSize, filteredBoosters.length)} / {filteredBoosters.length} Active Records
               </span>
             </div>
-          </div>
-
+          
           <div className="w-full">
             {selectedForm?.startsWith('local_') && (
-              <div className="mb-6 p-4 border border-dashed border-[#2D2D30] rounded-sm bg-white/[0.01]">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-[10px] uppercase tracking-widest text-[#4ADE80] flex items-center gap-2">
-                    <ListPlus className="w-3 h-3" />
-                    Add Entry to Local Database
-                  </p>
+              <div className="mb-10 p-8 border border-white/10 rounded-3xl bg-white/[0.01] shadow-2xl relative overflow-hidden backdrop-blur-sm">
+                <div className="absolute top-0 right-0 p-8 opacity-5">
+                   <ListPlus className="w-24 h-24" />
+                </div>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-[10px] uppercase font-bold tracking-[0.3em] text-[#4ADE80] flex items-center gap-2">
+                       <div className="w-1.5 h-1.5 rounded-full bg-[#4ADE80] shadow-[0_0_10px_#4ADE80]" />
+                       Add New Entry
+                    </p>
+                    <p className="text-[11px] text-white/40 italic font-serif">Quick record creation for your local database</p>
+                  </div>
                   <button 
                     onClick={() => { setSettingsOpen(true); setConfigTab('BUILDER'); }}
-                    className="text-[9px] text-white/80 hover:text-[#4ADE80] transition-colors uppercase tracking-widest flex items-center gap-1"
+                    className="px-4 py-2 bg-white/5 text-[10px] font-bold text-white/80 hover:text-white hover:bg-white/10 transition-all uppercase tracking-widest flex items-center gap-2 rounded-xl shadow-sm border border-white/5"
                   >
-                    Edit Database Structure
-                    <Settings className="w-2.5 h-2.5" />
+                    Structure
+                    <Settings className="w-3 h-3" />
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-4 items-end">
                   {(currentForm?.schema || []).map(field => (
-                    <div key={field} className="flex flex-col gap-1.5">
-                      <label className="text-[10px] text-white/70 font-serif italic">{field}</label>
+                    <div key={field} className="flex flex-col gap-2">
+                      <label className="text-[10px] text-white/50 font-bold uppercase tracking-widest pl-1">{field}</label>
                       <input 
                         type="text"
                         placeholder="..."
                         value={newRowData[field] || ''}
                         onChange={(e) => setNewRowData(prev => ({ ...prev, [field]: e.target.value }))}
-                        className="bg-[#141416] border border-[#2D2D30] text-[11px] px-3 py-2 focus:border-[#4ADE80] outline-none text-white rounded-sm min-w-[160px] shadow-inner"
+                        className="bg-[#0A0A0B] border border-[#2D2D30] text-[11px] px-4 py-2.5 focus:border-[#4ADE80] outline-none text-white rounded-xl min-w-[180px] shadow-inner transition-all focus:ring-1 focus:ring-[#4ADE80]/30"
                       />
                     </div>
                   ))}
                   <button 
                     onClick={addLocalRow}
-                    className="px-8 py-2 bg-[#4ADE80]/10 text-[#4ADE80] text-[11px] uppercase tracking-widest rounded-sm border border-[#4ADE80]/20 hover:bg-[#4ADE80]/20 transition-all font-bold shadow-sm"
+                    className="px-10 py-2.5 bg-[#4ADE80] text-black text-[11px] uppercase tracking-[0.2em] rounded-xl hover:bg-[#22C55E] transition-all font-black shadow-[0_10px_30px_rgba(34,197,94,0.2)] active:scale-95"
                   >
                     Save Record
                   </button>
@@ -1619,297 +1915,203 @@ export default function App() {
               </div>
             )}
 
-            <div 
-              ref={tableContainerRef}
-              className="overflow-x-auto shadow-2xl rounded-sm border border-[#2D2D30] bg-[#141416] mb-20 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-[#2D2D30] relative group/table"
-            >
-              <table className="min-w-full border-collapse">
-              <thead className="sticky top-0 bg-[#141416] z-20 shadow-sm">
-                <tr className="border-b border-[#2D2D30]">
-                  <th className="py-4 px-4 text-[10px] text-white/80 uppercase tracking-widest font-medium w-[80px]">Status</th>
-                  {dynamicColumns.map((col, idx) => {
-                    const isLast = idx === dynamicColumns.length - 1;
-                    const isMajorSection = ['Primary Contact', 'Status', 'Games'].includes(col);
+            <div className="space-y-6 mb-20">
+              <AnimatePresence mode="popLayout">
+                {filteredBoosters
+                  .slice(pageSize === 0 ? 0 : (currentPage - 1) * pageSize, pageSize === 0 ? filteredBoosters.length : currentPage * pageSize)
+                  .map((booster) => {
+                    const level = getNotificationLevel(booster);
+                    const statusConfig = STATUS_CONFIG[booster.status];
                     
                     return (
-                      <th 
-                        key={col} 
+                      <motion.div 
+                        layout
+                        key={booster.id}
+                        initial={{ opacity: 0, scale: 0.98 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.98 }}
                         className={cn(
-                          "text-left py-4 px-4 text-[10px] text-white/70 uppercase tracking-widest font-medium relative transition-colors hover:text-white/80",
-                          isMajorSection && "border-l border-[#2D2D30] first:border-l-0",
-                          col === 'Primary Contact' && "w-[200px]",
-                          col === 'Application Date' && "w-[140px]",
-                          col === 'Status' && "w-[150px]"
+                          "group relative bg-[#141416]/60 backdrop-blur-md border border-white/5 rounded-[2.5rem] p-6 sm:p-8 transition-all hover:bg-[#141416]/80 hover:border-[#D4AF37]/30 shadow-2xl",
+                          selectedBoosterIds.has(booster.id) && "ring-2 ring-[#D4AF37] bg-[#D4AF37]/5"
                         )}
                       >
-                        <span 
-                          className="line-clamp-1 truncate max-w-[200px] flex items-center gap-2" 
-                          title={col}
+                        {/* Selector indicator */}
+                        <div 
+                          onClick={() => toggleBoosterSelection(booster.id)}
+                          className={cn(
+                            "absolute left-4 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full border flex items-center justify-center cursor-pointer transition-all z-10",
+                            selectedBoosterIds.has(booster.id) 
+                              ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.4)] scale-110" 
+                              : "border-white/10 group-hover:border-[#D4AF37]/40"
+                          )}
                         >
-                          {col === 'Primary Contact' && <Globe className="w-2.5 h-2.5 text-[#D4AF37]" />}
-                          {col === 'Games' && <Gamepad2 className="w-2.5 h-2.5 text-[#D4AF37]" />}
-                          {col === 'Working Hours' && <Clock className="w-2.5 h-2.5 text-[#D4AF37]" />}
-                          {getColumnName(col)}
-                        </span>
-                      </th>
+                          {selectedBoosterIds.has(booster.id) && <Check className="w-4 h-4 stroke-[3]" />}
+                        </div>
+
+                        <div className="pl-10 sm:pl-12">
+                          <div className="flex flex-col xl:flex-row gap-6 xl:items-center justify-between">
+                            {/* Left Section: Identity & Basics */}
+                            <div className="flex flex-col gap-3 min-w-0 max-w-md">
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] text-white/30 uppercase font-mono tracking-tighter">ID: {booster.id.slice(0, 8)}</span>
+                                <div className={cn(
+                                  "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-sm",
+                                  statusConfig?.color
+                                )}>
+                                  {statusConfig?.funnelLabel || booster.status}
+                                </div>
+                                {level && (
+                                  <div className={cn(
+                                    "px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest animate-pulse",
+                                    level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
+                                  )}>
+                                    {level}
+                                  </div>
+                                )}
+                              </div>
+                              <h3 className="font-serif italic text-2xl text-white truncate group-hover:text-[#D4AF37] transition-colors">
+                                {booster.telegram || booster.discord || 'Booster Anonymous'}
+                              </h3>
+                              <div className="flex flex-wrap gap-4 text-[10px] text-white/50 uppercase tracking-widest font-bold">
+                                <div className="flex items-center gap-1.5 focus-within:text-white transition-colors">
+                                  <Globe className="w-3 h-3 text-[#D4AF37]" />
+                                  <span>{booster.region || 'Region Unknown'}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <Clock className="w-3 h-3 text-[#D4AF37]" />
+                                  <span>{new Date(booster.createdAt).toLocaleDateString('en-GB')}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Middle Section: Dynamic Fields Preview */}
+                            <div className="flex-1 grid grid-cols-2 lg:grid-cols-3 gap-6 pt-6 xl:pt-0 xl:border-l border-white/5 xl:pl-12">
+                               <div className="flex flex-col gap-1.5 focus-within:scale-105 transition-transform duration-300">
+                                 <span className="text-[8px] text-white/30 uppercase font-black tracking-widest pl-1">Primary Contacts</span>
+                                 <div className="space-y-1">
+                                   <div onClick={() => copyToClipboard(booster.telegram, `tg-${booster.id}`)} className="flex items-center gap-2 cursor-pointer group/item">
+                                     <MessageSquare className="w-3 h-3 text-blue-400" />
+                                     <span className="text-[11px] text-white/80 group-hover/item:text-[#D4AF37] transition-colors truncate">{booster.telegram || '—'}</span>
+                                   </div>
+                                   <div onClick={() => copyToClipboard(booster.discord, `ds-${booster.id}`)} className="flex items-center gap-2 cursor-pointer group/item">
+                                     <Users className="w-3 h-3 text-indigo-400" />
+                                     <span className="text-[11px] text-white/80 group-hover/item:text-[#D4AF37] transition-colors truncate">{booster.discord || '—'}</span>
+                                   </div>
+                                 </div>
+                               </div>
+
+                               <div className="flex flex-col gap-1.5">
+                                 <span className="text-[8px] text-white/30 uppercase font-black tracking-widest pl-1">Target Games</span>
+                                 <div className="flex flex-wrap gap-1.5">
+                                   {(booster.games || 'No Games Set').split(/[,;|]+/).map((item: string, i: number) => (
+                                     <span key={i} className={cn("px-2 py-0.5 rounded-md text-[9px] font-bold tracking-tight border", getBadgeStyles(item))}>
+                                       {item.trim()}
+                                     </span>
+                                   ))}
+                                 </div>
+                               </div>
+
+                               <div className="flex flex-col gap-1.5">
+                                 <span className="text-[8px] text-white/30 uppercase font-black tracking-widest pl-1">Status Timeline</span>
+                                 <div className="space-y-1">
+                                    {booster.statusHistory?.slice(-1).map((h, i) => (
+                                      <div key={i} className="text-[9px] text-emerald-400 flex flex-col gap-0.5">
+                                        <div className="flex items-center gap-1">
+                                          <Check className="w-2.5 h-2.5" />
+                                          <span className="font-bold underline underline-offset-2">Active Transition</span>
+                                        </div>
+                                        <span className="text-[8px] text-white/40 italic ml-3.5">
+                                          {new Date(h.timestamp).toLocaleDateString()} — {h.crmAccount ? `CRM: ${h.crmAccount}` : 'Direct Flow'}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {!booster.statusHistory && (
+                                       <span className="text-[9px] text-white/20 italic pl-1">Initial Application Sync</span>
+                                    )}
+                                 </div>
+                               </div>
+                            </div>
+
+                            {/* Right Section: Actions */}
+                            <div className="flex items-center gap-3 pt-6 xl:pt-0 shrink-0">
+                               <div className="relative group/actions">
+                                  <button className="bg-[#D4AF37] hover:bg-[#B8972F] text-black px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all shadow-[0_5px_15px_rgba(212,175,55,0.2)] hover:scale-105 active:scale-95">
+                                    UPDATE STATUS
+                                    <ChevronDown className="w-3.5 h-3.5 stroke-[3]" />
+                                  </button>
+                                  <div className="absolute right-0 top-full mt-2 w-56 bg-[#141416] border border-[#2D2D30] rounded-2xl shadow-2xl opacity-0 translate-y-2 invisible group-hover/actions:opacity-100 group-hover/actions:visible group-hover/actions:translate-y-0 transition-all z-50 py-2 overflow-hidden ring-1 ring-white/10">
+                                    {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+                                      <button
+                                        key={status}
+                                        onClick={() => updateStatus(booster.id, status as any)}
+                                        className="w-full text-left px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
+                                      >
+                                        {STATUS_CONFIG[status].funnelLabel}
+                                      </button>
+                                    ))}
+                                  </div>
+                               </div>
+
+                               <button 
+                                 onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes })}
+                                 className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 hover:border-[#D4AF37]/30 transition-all shadow-sm"
+                                 title="Add Note"
+                               >
+                                 <PlusCircle className="w-5 h-5" />
+                               </button>
+                            </div>
+                          </div>
+
+                          {/* Contact Specific Controls */}
+                          {booster.status === 'RECRUITMENT IN PROCESS' && (
+                            <div className="mt-8 flex items-center gap-4 p-4 bg-white/[0.02] border border-white/5 rounded-2xl animate-in zoom-in-95 duration-500">
+                               <div className="flex items-center gap-2 pr-4 border-r border-white/10">
+                                 <Zap className="w-4 h-4 text-[#D4AF37] animate-pulse" />
+                                 <span className="text-[10px] text-white/50 font-black uppercase tracking-widest">Contacting Booster:</span>
+                               </div>
+                               <div className="flex gap-2 w-full max-w-sm">
+                                  <button
+                                    onClick={() => updateContactStart(booster.id, 'TELEGRAM')}
+                                    className={cn(
+                                      "flex-1 px-4 py-2.5 text-[10px] rounded-xl transition-all border font-black uppercase tracking-widest flex items-center justify-center gap-2",
+                                      booster.contactStartedOn === 'TELEGRAM' 
+                                        ? "bg-blue-500/20 border-blue-500/50 text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.3)]" 
+                                        : "bg-white/5 border-transparent text-white/30 hover:bg-white/10 hover:text-white"
+                                    )}
+                                  >
+                                    <MessageSquare className="w-3.5 h-3.5" />
+                                    Telegram
+                                  </button>
+                                  <button
+                                    onClick={() => updateContactStart(booster.id, 'DISCORD')}
+                                    className={cn(
+                                      "flex-1 px-4 py-2.5 text-[10px] rounded-xl transition-all border font-black uppercase tracking-widest flex items-center justify-center gap-2",
+                                      booster.contactStartedOn === 'DISCORD' 
+                                        ? "bg-indigo-500/20 border-indigo-500/50 text-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.3)]" 
+                                        : "bg-white/5 border-transparent text-white/30 hover:bg-white/10 hover:text-white"
+                                    )}
+                                  >
+                                    <Users className="w-3.5 h-3.5" />
+                                    Discord
+                                  </button>
+                               </div>
+                            </div>
+                          )}
+
+                          {/* Notes Preview if exists */}
+                          {booster.notes && (
+                            <div className="mt-6 flex items-start gap-3 p-4 bg-[#0A0A0B]/50 rounded-2xl border border-white/5 italic font-serif">
+                               <Edit2 className="w-3.5 h-3.5 text-amber-400 mt-1 shrink-0" />
+                               <p className="text-[13px] text-white/70 leading-relaxed line-clamp-3">
+                                 {booster.notes}
+                               </p>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
                     );
                   })}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#2D2D30]">
-                <AnimatePresence mode="popLayout">
-                  {filteredBoosters
-                    .slice(pageSize === 0 ? 0 : (currentPage - 1) * pageSize, pageSize === 0 ? filteredBoosters.length : currentPage * pageSize)
-                    .map((booster) => (
-                    <motion.tr 
-                      layout
-                      key={booster.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0, scale: 0.98 }}
-                      className="group hover:bg-[#D4AF37]/[0.02] transition-colors"
-                    >
-                      <td className="py-4 px-4">
-                        <div className="relative inline-block group/actions">
-                          <button className="text-[#D4AF37] text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 hover:underline cursor-pointer">
-                            Update
-                            <ChevronDown className="w-3 h-3" />
-                          </button>
-                          <div className="absolute left-0 top-full mt-2 w-48 bg-[#141416] border border-[#2D2D30] rounded shadow-2xl opacity-0 invisible group-hover/actions:opacity-100 group-hover/actions:visible transition-all z-50 py-1 overflow-hidden">
-                            {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
-                               <button
-                                 key={status}
-                                 onClick={() => updateStatus(booster.id, status as any)}
-                                 className="w-full text-left px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors"
-                               >
-                                 {STATUS_CONFIG[status].funnelLabel}
-                               </button>
-                            ))}
-                          </div>
-                        </div>
-                      </td>
-                      {dynamicColumns.map(col => {
-                        if (col === 'Primary Contact') {
-                          const level = getNotificationLevel(booster);
-                          return (
-                            <td key={col} className="py-4 px-4 border-l-0">
-                              <div className="flex flex-col gap-2 group/cell relative">
-                                {level && (
-                                  <div className="absolute -left-2 top-0 bottom-0 w-0.5 flex flex-col gap-1 py-1">
-                                    <div className={cn(
-                                      "w-full h-full rounded-full animate-pulse",
-                                      level === 'URGENT' ? 'bg-rose-500' : level === 'WARNING' ? 'bg-amber-500' : 'bg-blue-400'
-                                    )} />
-                                  </div>
-                                )}
-                                <button 
-                                  onClick={() => copyToClipboard(booster.telegram, `tg-${booster.id}`)}
-                                  className={cn(
-                                    "flex items-center gap-2 group/copy text-left transition-all",
-                                    booster.telegram && booster.telegram !== '—' ? "hover:translate-x-1 cursor-pointer" : "cursor-default opacity-40"
-                                  )}
-                                >
-                                  <div className="w-5 h-5 rounded-full bg-blue-500/10 flex items-center justify-center border border-blue-500/20 group-hover/copy:border-blue-500/40 transition-colors">
-                                    <MessageSquare className="w-3 h-3 text-blue-400" />
-                                  </div>
-                                  <div className="flex flex-col min-w-0 pr-6 relative">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[11px] text-white font-medium truncate">{booster.telegram || '—'}</span>
-                                      {level && (
-                                        <div className={cn(
-                                          "flex items-center justify-center p-0.5 rounded-full ring-2 ring-white/10",
-                                          level === 'URGENT' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]' : 
-                                          level === 'WARNING' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' : 
-                                          'bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.5)]'
-                                        )}>
-                                          <AlertCircle className="w-2.5 h-2.5 text-white" />
-                                        </div>
-                                      )}
-                                    </div>
-                                    <span className="text-[8px] text-white/50 uppercase tracking-[0.1em]">Telegram</span>
-                                    {copiedId === `tg-${booster.id}` ? (
-                                      <Check className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-[#4ADE80]" />
-                                    ) : (
-                                      <Copy className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-white/0 group-hover/copy:text-white/20 transition-all" />
-                                    )}
-                                  </div>
-                                </button>
-
-                                <button 
-                                  onClick={() => copyToClipboard(booster.discord, `ds-${booster.id}`)}
-                                  className={cn(
-                                    "flex items-center gap-2 group/copy text-left transition-all",
-                                    booster.discord && booster.discord !== '—' ? "hover:translate-x-1 cursor-pointer" : "cursor-default opacity-40"
-                                  )}
-                                >
-                                  <div className="w-5 h-5 rounded-full bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 group-hover/copy:border-indigo-500/40 transition-colors">
-                                    <Users className="w-3 h-3 text-indigo-400" />
-                                  </div>
-                                  <div className="flex flex-col min-w-0 pr-6 relative">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[11px] text-white font-medium truncate">{booster.discord || '—'}</span>
-                                      {level && (
-                                        <div className={cn(
-                                          "flex items-center justify-center p-0.5 rounded-full ring-2 ring-white/10",
-                                          level === 'URGENT' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]' : 
-                                          level === 'WARNING' ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' : 
-                                          'bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.5)]'
-                                        )}>
-                                          <AlertCircle className="w-2.5 h-2.5 text-white" />
-                                        </div>
-                                      )}
-                                    </div>
-                                    <span className="text-[8px] text-white/50 uppercase tracking-[0.1em]">Discord</span>
-                                    {copiedId === `ds-${booster.id}` ? (
-                                      <Check className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-[#4ADE80]" />
-                                    ) : (
-                                      <Copy className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-white/0 group-hover/copy:text-white/20 transition-all" />
-                                    )}
-                                  </div>
-                                </button>
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        if (col === 'Application Date') {
-                          const stalledDays = getStalledDays(booster);
-                          return (
-                            <td key={col} className="py-4 px-4 border-l border-[#2D2D30]">
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-[11px] text-white font-mono">
-                                  {new Date(booster.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                </span>
-                                {stalledDays >= 2 && (
-                                  <div className={cn(
-                                    "flex items-center gap-1 text-[9px] font-bold uppercase tracking-tight px-1.5 py-0.5 rounded-sm w-fit mt-1 border",
-                                    stalledDays >= 4 ? "bg-rose-500/10 text-rose-500 border-rose-500/20" : "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                                  )}>
-                                    <Clock className="w-3 h-3" />
-                                    {stalledDays}d stalled
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        if (col === 'Status') {
-                           return (
-                            <td key={col} className="py-4 px-4 border-l border-[#2D2D30]">
-                              <div className="flex flex-col gap-2">
-                                <div className={cn(
-                                  "inline-flex self-start items-center px-2 py-0.5 rounded-sm text-[9px] font-bold uppercase tracking-widest border",
-                                  STATUS_CONFIG[booster.status]?.color
-                                )}>
-                                  {booster.status}
-                                </div>
-                                
-                                {booster.status === 'RECRUITMENT IN PROCESS' && (
-                                  <div className="flex flex-col gap-1 p-1 bg-white/[0.02] border border-white/5 rounded-sm">
-                                    <span className="text-[8px] text-white/50 uppercase tracking-tighter">Contact via:</span>
-                                    <div className="flex gap-1">
-                                      <button
-                                        onClick={() => updateContactStart(booster.id, 'TELEGRAM')}
-                                        className={cn(
-                                          "flex-1 px-1.5 py-0.5 text-[8px] rounded-sm transition-all border",
-                                          booster.contactStartedOn === 'TELEGRAM' 
-                                            ? "bg-blue-500/20 border-blue-500/40 text-blue-400 font-bold" 
-                                            : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
-                                        )}
-                                      >
-                                        TG
-                                      </button>
-                                      <button
-                                        onClick={() => updateContactStart(booster.id, 'DISCORD')}
-                                        className={cn(
-                                          "flex-1 px-1.5 py-0.5 text-[8px] rounded-sm transition-all border",
-                                          booster.contactStartedOn === 'DISCORD' 
-                                            ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-400 font-bold" 
-                                            : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
-                                        )}
-                                      >
-                                        DS
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {booster.statusUpdatedAt && (
-                                  <span className="text-[8px] text-white/40 italic">
-                                    Updated: {new Date(booster.statusUpdatedAt).toLocaleDateString()}
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        }
-
-                        const val = ['telegram', 'discord', 'games', 'workingHours', 'region'].includes(col.toLowerCase()) 
-                          ? (booster as any)[col.toLowerCase()] || (booster as any)[col] 
-                          : booster.fields[col];
-
-                        const isMajorSection = ['Primary Contact', 'Status', 'Games'].includes(col);
-
-                        return (
-                          <td key={col} className={cn(
-                            "py-4 px-4 transition-colors",
-                            isMajorSection && "border-l border-[#2D2D30] first:border-l-0"
-                          )}>
-                             <div className="group/cell relative">
-                               {editingCell?.id === booster.id && editingCell.field === col ? (
-                                 <input 
-                                   autoFocus
-                                   className="bg-[#0A0A0B] border border-[#D4AF37] text-[11px] text-white px-2 py-1 outline-none w-full italic"
-                                   value={editingCell.value}
-                                   onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
-                                   onBlur={() => updateBoosterField(booster.id, col, editingCell.value)}
-                                   onKeyDown={(e) => e.key === 'Enter' && updateBoosterField(booster.id, col, editingCell.value)}
-                                 />
-                               ) : (
-                                 <div 
-                                   onDoubleClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
-                                   className={cn(
-                                     "flex flex-wrap gap-1.5 cursor-text min-h-[1.5em]",
-                                     !['telegram', 'discord'].includes(col.toLowerCase()) && "italic"
-                                   )}
-                                 >
-                                   {val ? (
-                                     val.split(/[,;|]+/).map((item: string, i: number) => {
-                                       const trimmed = item.trim();
-                                       if (!trimmed) return null;
-                                       const isTag = col.toLowerCase() === 'games' || col.toLowerCase() === 'region' || trimmed.length < 25;
-                                       
-                                       return isTag ? (
-                                         <span 
-                                           key={i}
-                                           className={cn(
-                                             "px-2 py-0.5 rounded-sm text-[10px] font-bold tracking-tight border whitespace-nowrap",
-                                             getBadgeStyles(trimmed)
-                                           )}
-                                         >
-                                           {trimmed}
-                                         </span>
-                                       ) : (
-                                         <span key={i} className="text-[11px] text-white/80 uppercase tracking-tight line-clamp-2 max-w-[200px]">
-                                           {trimmed}
-                                         </span>
-                                       );
-                                     })
-                                   ) : (
-                                     <span className="text-[11px] text-white/50 uppercase tracking-widest">—</span>
-                                   )}
-                                 </div>
-                               )}
-                             </div>
-                          </td>
-                        );
-                      })}
-                    </motion.tr>
-                  ))}
-                </AnimatePresence>
-              </tbody>
-            </table>
+              </AnimatePresence>
             </div>
 
             {pageSize > 0 && filteredBoosters.length > pageSize && (
@@ -1939,8 +2141,11 @@ export default function App() {
                 <p className="font-serif italic text-white/80 text-lg">No booster records found.</p>
               </div>
             )}
+            </div>
+            </React.Fragment>
+          )}
           </div>
-        </div>
+          </main>
 
         {/* Floating Quick Navigation "Scroll Wheel" */}
         <div className="fixed bottom-24 right-6 sm:right-10 flex flex-col gap-2 z-30">
@@ -1987,7 +2192,79 @@ export default function App() {
             <span>Unprocessed: {boosters.filter(b => b.status === 'WAITING FOR RECRUITMENT').length}</span>
           </div>
         </footer>
-      </main>
+
+        {/* CRM Account Prompt Modal */}
+        <AnimatePresence>
+          {crmPrompt && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setCrmPrompt(null)}
+                className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#141416] border border-[#2D2D30] rounded-3xl p-8 shadow-2xl overflow-hidden"
+              >
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-emerald-400" />
+                <h3 className="font-serif italic text-2xl text-white mb-2">Connect CRM Account</h3>
+                <p className="text-[10px] text-white/40 uppercase tracking-widest mb-6">Assigning Booster to Database</p>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[9px] text-white/50 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">CRM Account Name</label>
+                    <input
+                      autoFocus
+                      type="text"
+                      className="w-full bg-[#0A0A0B] border border-[#2D2D30] rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20 transition-all shadow-inner"
+                      placeholder="Enter account name..."
+                      value={tempCrmName}
+                      onChange={(e) => setTempCrmName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && tempCrmName.trim()) {
+                          if (crmPrompt.ids.length === 1) {
+                            updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName);
+                          } else {
+                            bulkUpdateStatus(crmPrompt.status, tempCrmName);
+                          }
+                          setCrmPrompt(null);
+                        }
+                      }}
+                    />
+                  </div>
+                  
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      onClick={() => setCrmPrompt(null)}
+                      className="flex-1 py-3 bg-white/5 hover:bg-white/10 text-white/70 text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all border border-white/5"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      disabled={!tempCrmName.trim()}
+                      onClick={() => {
+                        if (crmPrompt.ids.length === 1) {
+                          updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName);
+                        } else {
+                          bulkUpdateStatus(crmPrompt.status, tempCrmName);
+                        }
+                        setCrmPrompt(null);
+                      }}
+                      className="flex-1 py-3 bg-[#D4AF37] hover:bg-[#B8972F] text-black text-[10px] font-bold uppercase tracking-widest rounded-xl transition-all disabled:opacity-30 shadow-lg shadow-[#D4AF37]/20"
+                    >
+                      Process Assignment
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }

@@ -271,9 +271,14 @@ export default function App() {
       if (!selectedForm && combined.length > 0) {
         const main = combined.find(f => f.title.toLowerCase().includes('become a booster'));
         setSelectedForm(main ? main.id : combined[0].id);
+      } else if (combined.length === 0) {
+        setError('No active recruitment forms found. Please check your Jotform or Firebase configuration.');
+        setLoading(false);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fetch forms', err);
+      setError('System could not initialize forms. Please verify your environment variables.');
+      setLoading(false);
     }
   };
 
@@ -812,9 +817,30 @@ export default function App() {
   if (loading && !refreshing && !boosters.length) {
     return (
       <div className="h-screen bg-[#0A0A0B] text-white flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <RefreshCw className="w-8 h-8 animate-spin text-[#D4AF37]" />
-          <p className="text-white/60 font-serif italic text-lg tracking-widest">Recruiter.OS Initializing...</p>
+        <div className="flex flex-col items-center gap-6 max-w-sm px-6 text-center">
+          <RefreshCw className="w-10 h-10 animate-spin text-[#D4AF37]" />
+          <div className="space-y-2">
+            <p className="text-white font-serif italic text-xl tracking-widest">Recruiter.OS Initializing...</p>
+            <p className="text-white/40 text-xs uppercase tracking-tighter">Connecting to Enterprise Data Pipelines</p>
+          </div>
+          
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 10 }}
+            className="pt-8 border-t border-white/5 space-y-4"
+          >
+             <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-bold">Taking too long?</p>
+             <p className="text-[11px] text-white/40 italic font-serif">
+               If it's been more than 15 seconds, check your environment variables or Firebase configuration.
+             </p>
+             <button 
+               onClick={() => window.location.reload()}
+               className="text-[10px] text-[#D4AF37] hover:underline uppercase tracking-widest font-bold"
+             >
+               Force Reload
+             </button>
+          </motion.div>
         </div>
       </div>
     );
@@ -1106,6 +1132,21 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#0A0A0B]">
+        {error && (
+          <div className="bg-rose-500/10 border-b border-rose-500/20 px-10 py-3 flex items-center justify-between gap-4 animate-in slide-in-from-top duration-300">
+            <div className="flex items-center gap-3 text-rose-400 text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span className="font-medium tracking-wide font-serif italic">{error}</span>
+            </div>
+            <button 
+              onClick={() => setError(null)}
+              className="text-rose-400/50 hover:text-rose-400 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <header className="h-20 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-10 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-sm z-10 gap-4 sm:gap-0 py-4 sm:py-0">
           <div className="flex items-center gap-3 text-[13px] text-white/90 w-full sm:w-auto">
             <button 

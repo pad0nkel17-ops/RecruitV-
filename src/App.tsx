@@ -155,9 +155,11 @@ export default function App() {
   const [newRowData, setNewRowData] = useState<Record<string, string>>({});
   const [fieldSettings, setFieldSettings] = useState<Record<string, Record<string, string[]>>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<'FIELDS' | 'BUILDER'>('FIELDS');
+  const [configTab, setConfigTab] = useState<'FIELDS' | 'BUILDER' | 'CONNECTION'>('FIELDS');
   const [configStatus, setConfigStatus] = useState<string>('ALL');
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
+  const [jotformKey, setJotformKey] = useState('');
+  const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -225,9 +227,11 @@ export default function App() {
       const blacklist = fbSettings?.blacklistForms || [];
       const fSettings = fbSettings?.fieldSettings || {};
       const colRenames = fbSettings?.columnRenames || {};
+      const jfKey = fbSettings?.jotformApiKey || '';
 
       setFieldSettings(fSettings);
       setColumnRenames(colRenames);
+      setJotformKey(jfKey);
 
       // 2. Get local forms from Firebase
       const fbLocalForms = await firebaseService.getForms();
@@ -238,7 +242,10 @@ export default function App() {
       let jotformError = '';
       
       try {
-        const jfResp = await axios.get('/api/jotform-forms');
+        const headers: any = {};
+        if (jfKey) headers['x-jotform-api-key'] = jfKey;
+
+        const jfResp = await axios.get('/api/jotform-forms', { headers });
         const allJf = jfResp.data.content || jfResp.data || [];
         
         const filtered = Array.isArray(allJf) ? allJf.filter((f: any) => {
@@ -380,6 +387,27 @@ export default function App() {
     }
   };
 
+  const saveJotformKey = async () => {
+    try {
+      setIsTestingKey(true);
+      // Validate key first by trying to fetch forms
+      const headers = { 'x-jotform-api-key': jotformKey };
+      const resp = await axios.get('/api/jotform-forms', { headers });
+      
+      if (resp.data.content || resp.data) {
+        await firebaseService.updateSettings({ jotformApiKey: jotformKey });
+        alert('Jotform API Key verified and saved successfully.');
+        fetchForms(); // Refresh everything
+      } else {
+        throw new Error('Invalid response from Jotform');
+      }
+    } catch (err: any) {
+      alert(`Failed to verify Jotform Key: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
+
   const copyToClipboard = (text: string, id: string) => {
     if (!text || text === '—') return;
     navigator.clipboard.writeText(text);
@@ -490,7 +518,13 @@ export default function App() {
       // 1. Fetch Jotform submissions via proxy if it's not a local form
       if (!idToFetch.startsWith('local_')) {
         try {
-          const jfResp = await axios.get('/api/jotform-submissions', { params: { formId: idToFetch } });
+          const headers: any = {};
+          if (jotformKey) headers['x-jotform-api-key'] = jotformKey;
+
+          const jfResp = await axios.get('/api/jotform-submissions', { 
+            params: { formId: idToFetch },
+            headers
+          });
           jotformSubs = (jfResp.data.content || []).filter((sub: any) => {
             const subDate = new Date(sub.created_at);
             return subDate.getFullYear() >= 2026;
@@ -1296,6 +1330,15 @@ export default function App() {
                       Database Builder
                     </button>
                   )}
+                  <button 
+                    onClick={() => setConfigTab('CONNECTION')}
+                    className={cn(
+                      "pb-2 text-[10px] uppercase tracking-widest transition-all px-2 ml-auto",
+                      configTab === 'CONNECTION' ? "text-[#D4AF37] border-b-2 border-[#D4AF37]" : "text-white/80 hover:text-white"
+                    )}
+                  >
+                    API Keys
+                  </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
@@ -1358,6 +1401,32 @@ export default function App() {
                             );
                           })}
                         </div>
+                      </div>
+                    </div>
+                  ) : configTab === 'CONNECTION' ? (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <p className="text-[10px] text-white/80 uppercase italic">Jotform API Configuration</p>
+                        <p className="text-[9px] text-white/40 leading-relaxed uppercase tracking-tighter">
+                          Use your own API key to bypass system defaults. Changes are saved to production database.
+                        </p>
+                        <input 
+                          type="password"
+                          placeholder="Paste Jotform API Key..."
+                          value={jotformKey}
+                          onChange={(e) => setJotformKey(e.target.value)}
+                          className="w-full bg-[#0A0A0B] border border-[#2D2D30] text-xs px-3 py-3 rounded-sm focus:border-[#D4AF37] outline-none text-white font-mono"
+                        />
+                        <button 
+                          disabled={isTestingKey}
+                          onClick={saveJotformKey}
+                          className={cn(
+                            "w-full py-3 bg-[#D4AF37] text-black text-[10px] uppercase font-bold tracking-[0.2em] rounded-sm hover:bg-[#B4942E] transition-all flex items-center justify-center gap-2",
+                            isTestingKey && "opacity-50 cursor-not-allowed"
+                          )}
+                        >
+                          {isTestingKey ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Verify & Save Key'}
+                        </button>
                       </div>
                     </div>
                   ) : (

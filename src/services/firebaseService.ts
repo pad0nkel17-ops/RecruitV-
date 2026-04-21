@@ -40,6 +40,7 @@ export interface Settings {
   manualForms: string[];
   blacklistForms: string[];
   fieldSettings: Record<string, any>;
+  jotformApiKey?: string;
 }
 
 const FORMS_COL = 'forms';

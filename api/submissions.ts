@@ -3,8 +3,8 @@ import axios from 'axios';
 export default async (req: any, res: any) => {
   try {
     const { formId } = req.query;
-    const apiKey = process.env.JOTFORM_API_KEY;
-    if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
+    const apiKey = req.headers['x-jotform-api-key'] || process.env.JOTFORM_API_KEY;
+    if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing or API Key not found' });
     
     let response;
     try {

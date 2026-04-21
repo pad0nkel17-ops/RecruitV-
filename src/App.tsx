@@ -235,19 +235,31 @@ export default function App() {
       // 3. Get Jotform forms from Server Proxy
       let jotformActive: any[] = [];
       let jotformHidden: any[] = [];
+      let jotformError = '';
       
       try {
         const jfResp = await axios.get('/api/jotform-forms');
-        const allJf = jfResp.data.content || [];
-        const filtered = allJf.filter((f: any) => {
+        const allJf = jfResp.data.content || jfResp.data || [];
+        
+        const filtered = Array.isArray(allJf) ? allJf.filter((f: any) => {
           const id = String(f.id);
           if (blacklist.includes(id)) return false;
-          return (f.title || '').toUpperCase().startsWith('BECOME A') || manual.includes(id);
-        });
+          // Matching 'BECOME A' or manual import
+          return (f.title || '').toUpperCase().includes('BECOME A') || manual.includes(id);
+        }) : [];
+        
         jotformActive = filtered.filter((f: any) => !ignored.includes(String(f.id)));
         jotformHidden = filtered.filter((f: any) => ignored.includes(String(f.id)));
-      } catch (e) {
-        console.error('Failed to proxy Jotform forms');
+        
+        if (Array.isArray(allJf) && allJf.length > 0 && jotformActive.length === 0 && fbLocalForms.length === 0) {
+           jotformError = 'Found forms in Jotform, but none match "BECOME A". Try manual import in Settings.';
+        }
+      } catch (e: any) {
+        if (e.response?.status === 401) {
+          jotformError = 'Jotform API Key is missing. Add JOTFORM_API_KEY to your Vercel Environment Variables.';
+        } else {
+          console.error('Failed to proxy Jotform forms');
+        }
       }
 
       const combined = [...fbLocalForms, ...jotformActive].map(f => ({
@@ -272,7 +284,7 @@ export default function App() {
         const main = combined.find(f => f.title.toLowerCase().includes('become a booster'));
         setSelectedForm(main ? main.id : combined[0].id);
       } else if (combined.length === 0) {
-        setError('No active recruitment forms found. Please check your Jotform or Firebase configuration.');
+        setError(jotformError || 'No forms found. Connect a Jotform account or create a local database.');
         setLoading(false);
       }
     } catch (err: any) {

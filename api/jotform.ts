@@ -3,7 +3,9 @@ import axios from 'axios';
 export default async (req: any, res: any) => {
   try {
     const apiKey = process.env.JOTFORM_API_KEY;
-    if (!apiKey) return res.json({ content: [] });
+    if (!apiKey) {
+      return res.status(401).json({ error: 'JOTFORM_API_KEY is missing in environment variables' });
+    }
     
     let response;
     try {

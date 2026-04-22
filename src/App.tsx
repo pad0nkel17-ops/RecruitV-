@@ -67,7 +67,7 @@ interface Booster {
   games: string;
   workingHours: string;
   region: string;
-  status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE';
+  status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE' | 'REJECTED';
   statusUpdatedAt: string;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   crmAccount?: string;
@@ -103,8 +103,8 @@ const renderCellContent = (val: any, col: string) => {
 };
 
 const getNotificationLevel = (booster: Booster) => {
-  // Notifications not needed on recruited / lost or reserve
-  if (['RECRUITED', 'LOST', 'RESERVE'].includes(booster.status)) {
+  // Notifications not needed on recruited / lost / reserve or rejected 
+  if (['RECRUITED', 'LOST', 'RESERVE', 'REJECTED'].includes(booster.status)) {
     return null;
   }
 
@@ -151,6 +151,7 @@ const STATUS_CONFIG = {
   'RECRUITED': { color: 'bg-green-500/10 text-green-500 border-green-500/20 shadow-[0_4px_12px_rgba(34,197,94,0.1)]', icon: UserCheck, funnelLabel: 'Recruited' },
   'LOST': { color: 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-[0_4px_12px_rgba(244,63,94,0.1)]', icon: UserMinus, funnelLabel: 'Lost' },
   'RESERVE': { color: 'bg-pink-500/10 text-pink-400 border-pink-500/20 shadow-[0_4px_12px_rgba(236,72,153,0.1)]', icon: Users, funnelLabel: 'Reserve' },
+  'REJECTED': { color: 'bg-red-500/10 text-red-500 border-red-500/20 shadow-[0_4px_12px_rgba(239,68,68,0.1)]', icon: AlertCircle, funnelLabel: 'Rejected' },
 };
 
 const DB_COLORS = [

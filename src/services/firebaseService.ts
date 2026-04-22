@@ -96,14 +96,14 @@ export const firebaseService = {
     const snap = await getDoc(ref);
     const now = new Date().toISOString();
     
-    const historyEntry = {
+    const historyEntry: any = {
       status: status || 'WAITING FOR RECRUITMENT',
       timestamp: now,
-      crmAccount
     };
+    if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
 
     if (!snap.exists()) {
-      await setDoc(ref, {
+      const newDoc: any = {
         id,
         formId,
         status: status || 'WAITING FOR RECRUITMENT',
@@ -111,8 +111,9 @@ export const firebaseService = {
         updatedAt: now,
         contactStartedOn: null,
         statusHistory: [historyEntry],
-        crmAccount
-      });
+      };
+      if (crmAccount !== undefined) newDoc.crmAccount = crmAccount;
+      await setDoc(ref, newDoc);
     } else {
       const currentData = snap.data() as BoosterData;
       const history = currentData.statusHistory || [];

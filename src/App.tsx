@@ -223,9 +223,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('pageSize', pageSize.toString());
     setCurrentPage(1);
-  }, [pageSize]);
+  }, [pageSize, activeTab, search, gameFilter, selectedForm]);
 
   const [scrollPercent, setScrollPercent] = useState(0);
+
+  const [notification, setNotification] = useState<{ message: string, type: 'SUCCESS' | 'ERROR' } | null>(null);
+
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
 
   useEffect(() => {
     const container = tableContainerRef.current;
@@ -537,32 +546,41 @@ export default function App() {
   };
 
   const updateBoosterField = async (id: string, field: string, value: string) => {
+    const sId = String(id);
     try {
       const bData = await firebaseService.getBoosterData(selectedForm);
-      const existing = bData.find(d => d.id === id);
+      const existing = bData.find(d => String(d.id) === sId);
       const now = new Date().toISOString();
       
       const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: value };
       
-      const newEntry: BoosterData = existing ? {
-        ...existing,
-        fieldOverrides: updatedOverrides,
-        updatedAt: now
-      } : {
-        id,
-        formId: selectedForm,
-        status: 'WAITING FOR RECRUITMENT',
-        notes: '',
-        contactStartedOn: null,
-        fieldOverrides: updatedOverrides,
-        updatedAt: now
-      };
+      // Special handling if someone is editing status field directly (if exposed)
+      if (field.toLowerCase() === 'status') {
+         await firebaseService.updateBoosterStatus(sId, selectedForm, value);
+      } else {
+        const newEntry: BoosterData = existing ? {
+          ...existing,
+          fieldOverrides: updatedOverrides,
+          updatedAt: now
+        } : {
+          id: sId,
+          formId: selectedForm,
+          status: 'WAITING FOR RECRUITMENT',
+          notes: '',
+          contactStartedOn: null,
+          fieldOverrides: updatedOverrides,
+          updatedAt: now
+        };
 
-      await firebaseService.saveBoosterData(newEntry);
+        await firebaseService.saveBoosterData(newEntry);
+      }
 
       setBoosters(prev => prev.map(b => {
-        if (b.id !== id) return b;
-        if (['telegram', 'discord', 'games', 'workingHours', 'region'].includes(field)) {
+        if (String(b.id) !== sId) return b;
+        if (field.toLowerCase() === 'status') {
+          return { ...b, status: value as any };
+        }
+        if (['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field)) {
           return { ...b, [field]: value };
         }
         return { ...b, fields: { ...b.fields, [field]: value } };
@@ -577,7 +595,7 @@ export default function App() {
 
   const dynamicColumns = useMemo(() => {
     const counts: Record<string, number> = {};
-    const excluded = ['id', 'token', 'other', 'notes', 'formId', 'telegram', 'discord', 'contact'];
+    const excluded = ['id', 'token', 'other', 'notes', 'formId', 'telegram', 'discord', 'contact', 'games', 'game'];
     const formSettings = fieldSettings[selectedForm] || {};
     const hidden = formSettings[activeTab] || [];
     
@@ -660,7 +678,7 @@ export default function App() {
           };
 
           return {
-            id: d.id,
+            id: String(d.id),
             createdAt: d.updatedAt,
             telegram: getFVal(['telegram', 'tg', 'contact']),
             discord: getFVal(['discord', 'ds']),
@@ -680,7 +698,8 @@ export default function App() {
       } else {
         // Merge Jotform with Firebase
         merged = jotformSubs.map((sub: any) => {
-          const persist = fbData.find(d => d.id === sub.id);
+          const sId = String(sub.id);
+          const persist = fbData.find(d => String(d.id) === sId);
           const answers = sub.answers || {};
           
           const formatAnswer = (ans: any) => {
@@ -707,7 +726,7 @@ export default function App() {
           };
 
           return {
-            id: sub.id,
+            id: sId,
             createdAt: sub.created_at,
             telegram: getVal('Telegram') || getVal('Contact'),
             discord: getVal('Discord'),
@@ -880,25 +899,33 @@ export default function App() {
   const [tempCrmName, setTempCrmName] = useState('');
 
   const updateStatus = async (id: string, status: Booster['status'], crmAccount?: string) => {
+    const sId = String(id);
     if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
-      setCrmPrompt({ ids: [id], status });
+      setCrmPrompt({ ids: [sId], status });
       setTempCrmName('');
       return;
     }
     try {
-      await firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount);
-      setBoosters(prev => prev.map(b => b.id === id ? { 
-        ...b, 
-        status, 
-        crmAccount: crmAccount || b.crmAccount,
-        statusUpdatedAt: new Date().toISOString(),
-        statusHistory: [
-          ...(b.statusHistory || []),
-          { status, timestamp: new Date().toISOString(), crmAccount }
-        ]
-      } : b));
+      await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount);
+      
+      setNotification({ message: `Booster moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });
+
+      setBoosters(prev => prev.map(b => {
+        if (String(b.id) !== sId) return b;
+        
+        const historyEntry: any = { status, timestamp: new Date().toISOString() };
+        if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
+
+        return { 
+          ...b, 
+          status, 
+          crmAccount: crmAccount || b.crmAccount,
+          statusUpdatedAt: new Date().toISOString(),
+          statusHistory: [...(b.statusHistory || []), historyEntry]
+        };
+      }));
     } catch (err) {
-      console.error('Failed to update status');
+      console.error('Failed to update status:', err);
     }
   };
 
@@ -906,29 +933,45 @@ export default function App() {
     if (selectedBoosterIds.size === 0 || !selectedForm) return;
     
     if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
-      setCrmPrompt({ ids: Array.from(selectedBoosterIds), status });
+      setCrmPrompt({ ids: Array.from(selectedBoosterIds).map(id => String(id)), status });
       setTempCrmName('');
       return;
     }
 
     try {
       setRefreshing(true);
+      const sIds = Array.from(selectedBoosterIds)
+        .map(id => String(id))
+        .filter(id => id && id !== 'undefined' && id !== 'null');
+      
+      if (sIds.length === 0) {
+        console.warn('No valid IDs selected for bulk update');
+        return;
+      }
+
       await Promise.all(
-        Array.from(selectedBoosterIds).map(id => firebaseService.updateBoosterStatus(id as string, selectedForm, status, undefined, crmAccount))
+        sIds.map(id => firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount))
       );
-      setBoosters(prev => prev.map(b => selectedBoosterIds.has(b.id) ? {
-        ...b,
-        status,
-        crmAccount: crmAccount || b.crmAccount,
-        statusUpdatedAt: new Date().toISOString(),
-        statusHistory: [
-          ...(b.statusHistory || []),
-          { status, timestamp: new Date().toISOString(), crmAccount }
-        ]
-      } : b));
+      
+      setNotification({ message: `${sIds.length} Boosters moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });
+
+      setBoosters(prev => prev.map(b => {
+        if (!sIds.includes(String(b.id))) return b;
+
+        const historyEntry: any = { status, timestamp: new Date().toISOString() };
+        if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
+
+        return {
+          ...b,
+          status,
+          crmAccount: crmAccount || b.crmAccount,
+          statusUpdatedAt: new Date().toISOString(),
+          statusHistory: [...(b.statusHistory || []), historyEntry]
+        };
+      }));
       setSelectedBoosterIds(new Set());
     } catch (err) {
-      console.error('Failed to bulk update status');
+      console.error('Failed to bulk update status:', err);
     } finally {
       setRefreshing(false);
     }
@@ -1083,6 +1126,25 @@ export default function App() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-[#0A0A0B] selection-accent relative">
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -100, x: '-50%' }}
+            animate={{ opacity: 1, y: 30, x: '-50%' }}
+            exit={{ opacity: 0, y: -100, x: '-50%' }}
+            className={cn(
+              "fixed top-0 left-1/2 z-[300] px-6 py-3 rounded-2xl shadow-2xl border backdrop-blur-xl flex items-center gap-3",
+              notification.type === 'SUCCESS' 
+                ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400" 
+                : "bg-rose-500/20 border-rose-500/40 text-rose-400"
+            )}
+          >
+            {notification.type === 'SUCCESS' ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            <span className="text-xs font-black uppercase tracking-[0.2em]">{notification.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Background Aesthetic */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-30">
         <div className="absolute inset-0 bg-gradient-to-br from-[#141416] via-[#0A0A0B] to-[#141416]" />
@@ -1974,7 +2036,7 @@ export default function App() {
               <table className="min-w-max w-full border-separate border-spacing-0">
                 <thead>
                   <tr className="bg-[#0A0A0B]/80 backdrop-blur-md">
-                    <th className="sticky left-0 z-20 bg-[#0A0A0B]/95 px-4 py-4 text-left border-b border-white/5 rounded-tl-[2.5rem]">
+                    <th className="sticky top-0 left-0 z-50 bg-[#0A0A0B] px-4 py-4 text-left border-b border-white/10 rounded-tl-[2.5rem]">
                       <div 
                         onClick={() => {
                           if (selectedBoosterIds.size === filteredBoosters.length) {
@@ -1993,21 +2055,27 @@ export default function App() {
                         {selectedBoosterIds.size === filteredBoosters.length && filteredBoosters.length > 0 && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
                     </th>
-                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Booster Identity & Contacts
                     </th>
-                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                       Games & Skills
+                    </th>
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Progress
                     </th>
-                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                       CRM ACCOUNT
+                    </th>
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Region & Meta
                     </th>
                     {dynamicColumns.map(col => (
-                      <th key={col} className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 max-w-[200px]">
+                      <th key={col} className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 max-w-[200px]">
                         {getColumnName(col)}
                       </th>
                     ))}
-                    <th className="px-4 py-4 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 rounded-tr-[2.5rem]">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 rounded-tr-[2.5rem]">
                       Actions
                     </th>
                   </tr>
@@ -2047,7 +2115,7 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-4 py-4 border-b border-white/5">
-                              <div className="flex flex-col gap-2.5 min-w-[300px]">
+                              <div className="flex flex-col gap-2.5 min-w-[200px]">
                                 {(() => {
                                   const rawName = booster.fields?.['Name/Contact'] || '';
                                   const tg = booster.telegram || '';
@@ -2058,8 +2126,8 @@ export default function App() {
 
                                   return (
                                     <>
-                                      <div className="flex items-center gap-3">
-                                        <div className="flex items-center gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
                                           <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
                                           <span className="text-white/20 font-light select-none">:</span>
                                           {level ? (
@@ -2074,9 +2142,9 @@ export default function App() {
                                           )}
                                         </div>
                                         
-                                        <span className="text-white/20 font-light select-none ml-1">:</span>
+                                        <span className="text-white/20 font-light select-none">:</span>
                                         
-                                        <div className="flex flex-wrap gap-2 ml-2">
+                                        <div className="flex flex-wrap gap-2">
                                           {tg && (
                                             <div 
                                               className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/40 group/link cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/60 transition-all shadow-md" 
@@ -2114,6 +2182,9 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-4 py-4 border-b border-white/5">
+                               {renderCellContent(booster.games, 'Games')}
+                            </td>
+                            <td className="px-4 py-4 border-b border-white/5">
                               <div className="flex flex-col gap-1.5">
                                 <div className={cn(
                                   "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm",
@@ -2129,8 +2200,41 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-4 py-4 border-b border-white/5">
-                               <div className="flex flex-col gap-0.5">
-                                  <div className="flex items-center gap-2">
+                              <div 
+                                onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
+                                className={cn(
+                                  "group/crm px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[160px]",
+                                  booster.crmAccount 
+                                    ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
+                                    : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
+                                )}
+                              >
+                                <span className={cn(
+                                  "text-[13px] uppercase font-bold tracking-wider truncate",
+                                  !booster.crmAccount && "italic font-normal text-[11px]"
+                                )}>
+                                  {booster.crmAccount || 'Not Assigned'}
+                                </span>
+                                <div className="flex items-center gap-1.5 ml-2">
+                                  {booster.crmAccount && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        copyToClipboard(booster.crmAccount!, `crm-${booster.id}`);
+                                      }}
+                                      className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                                      title="Copy CRM Account"
+                                    >
+                                       <Copy className="w-3 h-3 text-emerald-400" />
+                                    </button>
+                                  )}
+                                  <Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100 transition-opacity" />
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 border-b border-white/5">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
                                      <Globe className="w-2.5 h-2.5 text-[#D4AF37]/70" />
                                      <span className="text-[11px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
                                   </div>

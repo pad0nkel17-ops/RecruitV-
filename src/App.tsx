@@ -79,7 +79,7 @@ interface Booster {
 }
 
 const renderCellContent = (val: any, col: string) => {
-  if (!val || val === '—') return <span className="text-white/20 italic">—</span>;
+  if (!val || val === '—') return <span className="text-white/40 italic">—</span>;
   
   // Split into parts for potential multi-block rendering, but even single parts get blocks now
   const parts = val.toString().split(/[,;]+/).map((p: string) => p.trim()).filter(Boolean);
@@ -91,7 +91,7 @@ const renderCellContent = (val: any, col: string) => {
         <span 
           key={i} 
           className={cn(
-            "px-2 py-1 rounded bg-white/[0.04] border border-white/10 text-[9px] font-bold tracking-tight text-white/70 hover:text-white transition-colors break-all shadow-sm cursor-default block w-fit",
+            "px-2.5 py-1 rounded bg-white/[0.06] border border-white/20 text-[11px] font-medium tracking-tight text-white hover:text-white transition-colors break-all shadow-sm cursor-default block w-fit",
             col === 'Games' && getBadgeStyles(p)
           )}
         >
@@ -1065,7 +1065,7 @@ export default function App() {
             transition={{ delay: 10 }}
             className="pt-8 border-t border-white/5 space-y-4"
           >
-             <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] font-bold">Taking too long?</p>
+            <p className="text-[12px] text-white/50 uppercase tracking-[0.2em] font-bold">Taking too long?</p>
              <p className="text-[11px] text-white/40 italic font-serif">
                If it's been more than 15 seconds, check your environment variables or Firebase configuration.
              </p>
@@ -1151,14 +1151,14 @@ export default function App() {
 
         {/* Form Selection */}
         <div className="mb-8">
-          <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-2">
-             <span className="text-[10px] uppercase tracking-widest text-white/90">
+          <div className="flex items-center justify-between mb-4 border-b border-white/10 pb-2">
+             <span className="text-[11px] uppercase tracking-widest text-white">
               Databases
             </span>
             {hiddenForms.length > 0 && (
               <button 
                 onClick={() => setShowHidden(!showHidden)}
-                className="text-[9px] text-[#D4AF37] hover:underline"
+                className="text-[10px] text-[#D4AF37] hover:underline"
               >
                 {showHidden ? 'Hide Hidden' : `Archived (${hiddenForms.length})`}
               </button>
@@ -1195,8 +1195,8 @@ export default function App() {
                       <div className="flex items-center gap-2 overflow-hidden flex-1">
                         <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", isSelected ? colorClass.replace('text-', 'bg-') : "bg-white/20")} />
                         <span className={cn(
-                          "truncate text-[11px] font-bold uppercase tracking-widest",
-                          isSelected ? colorClass : "text-white/60 group-hover:text-white"
+                          "truncate text-[12px] font-bold uppercase tracking-widest",
+                          isSelected ? colorClass : "text-white/80 group-hover:text-white"
                         )} title={form.title}>
                           {form.title}
                         </span>
@@ -1226,15 +1226,15 @@ export default function App() {
                   </div>
                   
                   {summary && (
-                    <div className="flex items-center gap-2 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
-                       <div className="flex items-center gap-1 text-[8px] font-bold tracking-tighter">
+                    <div className="flex items-center gap-2 mt-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
+                       <div className="flex items-center gap-1 text-[10px] font-bold tracking-tighter">
                           <span className="text-rose-500">{summary.urgent}U</span>
-                          <span className="text-white/20">|</span>
+                          <span className="text-white/40">|</span>
                           <span className="text-amber-500">{summary.stale}S</span>
-                          <span className="text-white/20">|</span>
+                          <span className="text-white/40">|</span>
                           <span className="text-blue-500">{summary.new}N</span>
                        </div>
-                       <span className="text-[8px] text-white/20 uppercase tracking-widest ml-auto">Total: {summary.total}</span>
+                       <span className="text-[9px] text-white/40 uppercase tracking-widest ml-auto">Total: {summary.total}</span>
                     </div>
                   )}
                 </div>
@@ -1282,7 +1282,7 @@ export default function App() {
             {showHidden && hiddenForms.map((form) => (
               <div 
                 key={form.id} 
-                className="flex items-center justify-between gap-2 px-3 py-2 text-[10px] text-white/40 italic truncate border border-dashed border-[#2D2D30]"
+                className="flex items-center justify-between gap-2 px-3 py-2 text-[12px] text-white/60 italic truncate border border-dashed border-[#2D2D30]"
               >
                 <span className="truncate">{form.title}</span>
                 <div className="flex items-center gap-1">
@@ -1308,7 +1308,7 @@ export default function App() {
 
         {sidebarGroups.map((group, idx) => (
           <div key={idx} className="mb-8">
-            <span className="text-[10px] uppercase tracking-widest text-white/60 mb-3 block">
+            <span className="text-[11px] uppercase tracking-widest text-white/80 mb-3 block">
               {group.label}
             </span>
             <div className="space-y-1">
@@ -1334,7 +1334,7 @@ export default function App() {
                       <div className="flex flex-col items-start">
                         <span className="leading-tight font-medium tracking-tight whitespace-nowrap">{item.label}</span>
                         <div className="flex items-center gap-2 mt-0.5">
-                          <span className={cn("text-[10px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/20 group-hover:text-white/40")}>
+                          <span className={cn("text-[11px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/40 group-hover:text-white/60")}>
                             {count.toString().padStart(2, '0')}
                           </span>
                         </div>
@@ -1355,7 +1355,7 @@ export default function App() {
 
         <div className="mt-auto pt-6 border-t border-[#2D2D30]">
           <div className="flex items-center justify-between">
-            <div className="text-[10px] text-[#94949E] uppercase tracking-tighter">
+            <div className="text-[12px] text-[#A1A1AA] uppercase tracking-tighter">
               Vercel: Production
             </div>
             <div className="flex items-center gap-1.5">
@@ -1417,21 +1417,21 @@ export default function App() {
             <div className="flex items-center gap-2 sm:gap-3 bg-[#141416] p-1.5 rounded-xl border border-[#2D2D30] flex-shrink-0 shadow-inner">
               <div className="hidden md:flex items-center gap-2 px-3 border-r border-[#2D2D30]">
                 <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span className="text-[10px] text-white/50 uppercase tracking-[0.1em] font-bold whitespace-nowrap">Range</span>
+                <span className="text-[12px] text-white/70 uppercase tracking-[0.1em] font-bold whitespace-nowrap">Range</span>
               </div>
               <div className="flex items-center gap-2 px-2">
                 <input 
                   type="date" 
                   value={dateRange.start}
                   onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                  className="bg-transparent text-[10px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0"
+                  className="bg-transparent text-[12px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0 cursor-pointer"
                 />
-                <span className="text-white/20 text-[10px] select-none">—</span>
+                <span className="text-white/40 text-[12px] select-none">—</span>
                 <input 
                   type="date" 
                   value={dateRange.end}
                   onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                  className="bg-transparent text-[10px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0"
+                  className="bg-transparent text-[12px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0 cursor-pointer"
                 />
                 {(dateRange.start || dateRange.end) && (
                   <button 
@@ -1483,7 +1483,7 @@ export default function App() {
               <button 
                 onClick={() => fetchData()}
                 disabled={refreshing}
-                className="p-2 sm:px-6 sm:py-2 bg-white/5 border border-white/10 text-white text-[10px] font-bold uppercase tracking-[0.2em] rounded-xl hover:bg-white/10 hover:border-white/20 transition-all disabled:opacity-50 flex items-center gap-2 shadow-sm active:scale-95"
+                className="p-2 sm:px-6 sm:py-2 bg-white/5 border border-white/10 text-white text-[12px] font-bold uppercase tracking-[0.2em] rounded-xl hover:bg-white/10 hover:border-white/20 transition-all disabled:opacity-50 flex items-center gap-2 shadow-sm active:scale-95"
                 title="Manual Sync"
               >
                 {refreshing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
@@ -1619,7 +1619,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-8">
                   <div>
                     <h3 className="font-serif italic text-xl text-white">Settings</h3>
-                    <p className="text-[10px] text-white/80 uppercase tracking-widest">Database Configuration</p>
+                    <p className="text-[12px] text-white tracking-widest uppercase font-bold">Database Configuration</p>
                   </div>
                   <button 
                     onClick={() => setSettingsOpen(false)}
@@ -1665,7 +1665,7 @@ export default function App() {
                   {configTab === 'FIELDS' ? (
                     <div className="space-y-6">
                       <div className="space-y-2">
-                        <p className="text-[10px] text-white/80 uppercase italic">1. Select Recruitment Status context</p>
+                        <p className="text-[12px] text-white/90 uppercase italic font-medium">1. Select Recruitment Status context</p>
                         <div className="flex flex-wrap gap-1">
                           {['ALL', ...Object.keys(STATUS_CONFIG)].map(status => (
                             <button
@@ -1685,7 +1685,7 @@ export default function App() {
                       </div>
 
                       <div className="space-y-2">
-                        <p className="text-[10px] text-white/80 uppercase italic">2. Manage Columns & Renames</p>
+                        <p className="text-[12px] text-white/90 uppercase italic font-medium">2. Manage Columns & Renames</p>
                         <div className="grid grid-cols-1 gap-1">
                           {allDetectedFields.sort().map(field => {
                             const isHidden = (fieldSettings[selectedForm]?.[configStatus] || []).includes(field);
@@ -1726,7 +1726,7 @@ export default function App() {
                   ) : configTab === 'CONNECTION' ? (
                     <div className="space-y-6">
                       <div className="space-y-2">
-                        <p className="text-[10px] text-white/80 uppercase italic">Jotform API Configuration</p>
+                        <p className="text-[12px] text-white/90 uppercase italic font-medium">Jotform API Configuration</p>
                         <p className="text-[9px] text-white/40 leading-relaxed uppercase tracking-tighter">
                           Use your own API key to bypass system defaults. Changes are saved to production database.
                         </p>
@@ -1792,7 +1792,7 @@ export default function App() {
                 </div>
 
                 <div className="mt-8 pt-6 border-t border-[#2D2D30]">
-                   <p className="text-[9px] text-white/40 uppercase tracking-widest">Settings will be saved automatically to local persistent storage.</p>
+                   <p className="text-[11px] text-white/60 uppercase tracking-widest">Settings will be saved automatically to local persistent storage.</p>
                 </div>
               </motion.div>
             )}
@@ -1875,7 +1875,7 @@ export default function App() {
               <div className="flex items-center gap-4 bg-[#141416]/50 border border-white/5 px-6 py-3 rounded-3xl backdrop-blur-xl">
                  <div className="flex items-center gap-2 pr-4 border-r border-white/5">
                    <Layout className="w-3.5 h-3.5 text-[#D4AF37]" />
-                   <span className="text-[10px] font-black text-white/50 uppercase tracking-widest">Pool Status</span>
+                   <span className="text-[12px] font-black text-white/70 uppercase tracking-widest">Pool Status</span>
                  </div>
                  {(() => {
                    const urgent = boosters.filter(b => getNotificationLevel(b) === 'URGENT').length;
@@ -1885,7 +1885,7 @@ export default function App() {
                      <div className="flex items-center gap-3">
                        <div className="flex items-center gap-1.5">
                          <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] animate-pulse" />
-                         <span className="text-[10px] font-black text-rose-500 font-mono">{urgent} URGENT</span>
+                         <span className="text-[12px] font-black text-rose-500 font-mono">{urgent} URGENT</span>
                        </div>
                        <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
                          <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_#F59E0B]" />
@@ -1947,7 +1947,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-4 items-end">
                   {(currentForm?.schema || []).map(field => (
                     <div key={field} className="flex flex-col gap-2">
-                      <label className="text-[10px] text-white/50 font-bold uppercase tracking-widest pl-1">{field}</label>
+                      <label className="text-[12px] text-white/70 font-bold uppercase tracking-widest pl-1">{field}</label>
                       <input 
                         type="text"
                         placeholder="..."
@@ -1993,21 +1993,21 @@ export default function App() {
                         {selectedBoosterIds.size === filteredBoosters.length && filteredBoosters.length > 0 && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
                     </th>
-                    <th className="px-4 py-4 text-left text-[10px] font-black uppercase tracking-[0.2em] text-white/40 border-b border-white/5 whitespace-nowrap">
+                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
                        Booster Identity & Contacts
                     </th>
-                    <th className="px-4 py-4 text-left text-[10px] font-black uppercase tracking-[0.2em] text-white/40 border-b border-white/5 whitespace-nowrap">
+                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
                        Progress
                     </th>
-                    <th className="px-4 py-4 text-left text-[10px] font-black uppercase tracking-[0.2em] text-white/40 border-b border-white/5 whitespace-nowrap">
+                    <th className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 whitespace-nowrap">
                        Region & Meta
                     </th>
                     {dynamicColumns.map(col => (
-                      <th key={col} className="px-4 py-4 text-left text-[10px] font-black uppercase tracking-[0.2em] text-white/40 border-b border-white/5 max-w-[200px]">
+                      <th key={col} className="px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 max-w-[200px]">
                         {getColumnName(col)}
                       </th>
                     ))}
-                    <th className="px-4 py-4 text-right text-[10px] font-black uppercase tracking-[0.2em] text-white/40 border-b border-white/5 rounded-tr-[2.5rem]">
+                    <th className="px-4 py-4 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/5 rounded-tr-[2.5rem]">
                       Actions
                     </th>
                   </tr>
@@ -2049,10 +2049,10 @@ export default function App() {
                             <td className="px-4 py-4 border-b border-white/5">
                               <div className="flex flex-col gap-2 min-w-[180px]">
                                 <div className="flex items-center gap-2">
-                                  <span className="text-[9px] text-white/20 font-mono tracking-tighter uppercase">#{booster.id.slice(0, 6)}</span>
+                                  <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase">#{booster.id.slice(0, 6)}</span>
                                   {level && (
                                     <div className={cn(
-                                      "px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-widest",
+                                      "px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-widest",
                                       level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
                                     )}>
                                       {level}
@@ -2069,29 +2069,35 @@ export default function App() {
                                     const showBigName = rawName && 
                                                         rawName.toLowerCase() !== tg.toLowerCase() && 
                                                         rawName.toLowerCase() !== ds.toLowerCase();
-
+ 
                                     return (
                                       <>
                                         {showBigName && (
-                                          <span className="text-[13px] font-bold text-white group-hover:text-[#D4AF37] transition-colors truncate max-w-[200px] mb-1">
+                                          <span className="text-sm font-bold text-white group-hover:text-[#D4AF37] transition-colors truncate max-w-[200px] mb-1">
                                             {rawName}
                                           </span>
                                         )}
-                                        <div className="flex flex-col gap-1 border-l border-white/10 pl-2">
+                                        <div className="flex flex-wrap gap-1.5 mt-2">
                                           {tg && (
-                                            <div className="flex items-center gap-1.5 group/link cursor-pointer" onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}>
-                                              <MessageSquare className="w-2.5 h-2.5 text-blue-400/50 group-hover/link:text-blue-400" />
-                                              <span className="text-[10px] text-white/40 group-hover/link:text-blue-400 truncate font-mono">TG: {tg}</span>
+                                            <div 
+                                              className="flex items-center gap-2 px-2.5 py-1 rounded bg-blue-500/10 border border-blue-500/30 group/link cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/50 transition-all shadow-sm" 
+                                              onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
+                                            >
+                                              <MessageSquare className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />
+                                              <span className="text-[12px] font-bold text-blue-100/90 font-mono tracking-tight">{tg}</span>
                                             </div>
                                           )}
                                           {ds && (
-                                            <div className="flex items-center gap-1.5 group/link cursor-pointer" onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}>
-                                              <Users className="w-2.5 h-2.5 text-indigo-400/50 group-hover/link:text-indigo-400" />
-                                              <span className="text-[10px] text-white/40 group-hover/link:text-indigo-400 truncate font-mono">DS: {ds}</span>
+                                            <div 
+                                              className="flex items-center gap-2 px-2.5 py-1 rounded bg-indigo-500/10 border border-indigo-500/30 group/link cursor-pointer hover:bg-indigo-500/20 hover:border-indigo-500/50 transition-all shadow-sm" 
+                                              onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
+                                            >
+                                              <Users className="w-3.5 h-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
+                                              <span className="text-[12px] font-bold text-indigo-100/90 font-mono tracking-tight">{ds}</span>
                                             </div>
                                           )}
                                           {!tg && !ds && !rawName && (
-                                            <span className="text-[10px] text-white/20 italic">No Identity</span>
+                                            <span className="text-[11px] text-white/30 italic">No Identity</span>
                                           )}
                                         </div>
                                       </>
@@ -2103,13 +2109,13 @@ export default function App() {
                             <td className="px-4 py-4 border-b border-white/5">
                               <div className="flex flex-col gap-1.5">
                                 <div className={cn(
-                                  "px-2.5 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border w-fit shadow-sm",
+                                  "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm",
                                   statusConfig?.color
                                 )}>
                                   {statusConfig?.funnelLabel || booster.status}
                                 </div>
                                 {booster.statusHistory && booster.statusHistory.length > 0 && (
-                                  <span className="text-[8px] text-emerald-400/50 font-mono tracking-tighter">
+                                  <span className="text-[10px] text-emerald-400/70 font-mono tracking-tighter">
                                     {new Date(booster.statusHistory[booster.statusHistory.length - 1].timestamp).toLocaleDateString()}
                                   </span>
                                 )}
@@ -2118,10 +2124,10 @@ export default function App() {
                             <td className="px-4 py-4 border-b border-white/5">
                                <div className="flex flex-col gap-0.5">
                                   <div className="flex items-center gap-2">
-                                     <Globe className="w-2.5 h-2.5 text-[#D4AF37]/50" />
-                                     <span className="text-[9px] text-white/50 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
+                                     <Globe className="w-2.5 h-2.5 text-[#D4AF37]/70" />
+                                     <span className="text-[11px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
                                   </div>
-                                  <span className="text-[8px] text-white/20 font-mono ml-4.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
+                                  <span className="text-[10px] text-white/40 font-mono ml-4.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
                                </div>
                             </td>
                             {dynamicColumns.map(col => {
@@ -2327,11 +2333,11 @@ export default function App() {
               >
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-emerald-400" />
                 <h3 className="font-serif italic text-2xl text-white mb-2">Connect CRM Account</h3>
-                <p className="text-[10px] text-white/40 uppercase tracking-widest mb-6">Assigning Booster to Database</p>
+                <p className="text-[12px] text-white/60 uppercase tracking-widest mb-6">Assigning Booster to Database</p>
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[9px] text-white/50 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">CRM Account Name</label>
+                    <label className="text-[11px] text-white/70 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">CRM Account Name</label>
                     <input
                       autoFocus
                       type="text"
@@ -2399,11 +2405,11 @@ export default function App() {
               >
                 <div className="absolute top-0 left-0 w-full h-1 bg-[#D4AF37]" />
                 <h3 className="font-serif italic text-2xl text-white mb-2">Edit {editingCell.field}</h3>
-                <p className="text-[10px] text-white/40 uppercase tracking-widest mb-6">Updating Record Data</p>
+                <p className="text-[12px] text-white/60 uppercase tracking-widest mb-6">Updating Record Data</p>
                 
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[9px] text-white/50 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">
+                    <label className="text-[11px] text-white/70 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">
                       {editingCell.field === 'notes' ? 'Record Notes' : `Value for ${editingCell.field}`}
                     </label>
                     {editingCell.field === 'notes' ? (

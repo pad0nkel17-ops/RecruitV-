@@ -2047,63 +2047,70 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-4 py-4 border-b border-white/5">
-                              <div className="flex flex-col gap-2 min-w-[180px]">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase">#{booster.id.slice(0, 6)}</span>
-                                  {level && (
-                                    <div className={cn(
-                                      "px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-widest",
-                                      level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
-                                    )}>
-                                      {level}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex flex-col -mt-1">
-                                  {(() => {
-                                    const rawName = booster.fields?.['Name/Contact'] || '';
-                                    const tg = booster.telegram || '';
-                                    const ds = booster.discord || '';
-                                    
-                                    // Only show the "big" name if it provides unique information beyond the handles
-                                    const showBigName = rawName && 
-                                                        rawName.toLowerCase() !== tg.toLowerCase() && 
-                                                        rawName.toLowerCase() !== ds.toLowerCase();
- 
-                                    return (
-                                      <>
-                                        {showBigName && (
-                                          <span className="text-sm font-bold text-white group-hover:text-[#D4AF37] transition-colors truncate max-w-[200px] mb-1">
-                                            {rawName}
-                                          </span>
-                                        )}
-                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                              <div className="flex flex-col gap-2.5 min-w-[300px]">
+                                {(() => {
+                                  const rawName = booster.fields?.['Name/Contact'] || '';
+                                  const tg = booster.telegram || '';
+                                  const ds = booster.discord || '';
+                                  const showBigName = rawName && 
+                                                      rawName.toLowerCase() !== tg.toLowerCase() && 
+                                                      rawName.toLowerCase() !== ds.toLowerCase();
+
+                                  return (
+                                    <>
+                                      <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
+                                          <span className="text-white/20 font-light select-none">:</span>
+                                          {level ? (
+                                            <div className={cn(
+                                              "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
+                                              level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
+                                            )}>
+                                              {level}
+                                            </div>
+                                          ) : (
+                                            <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
+                                          )}
+                                        </div>
+                                        
+                                        <span className="text-white/20 font-light select-none ml-1">:</span>
+                                        
+                                        <div className="flex flex-wrap gap-2 ml-2">
                                           {tg && (
                                             <div 
-                                              className="flex items-center gap-2 px-2.5 py-1 rounded bg-blue-500/10 border border-blue-500/30 group/link cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/50 transition-all shadow-sm" 
+                                              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/40 group/link cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/60 transition-all shadow-md" 
                                               onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
                                             >
-                                              <MessageSquare className="w-3.5 h-3.5 text-blue-400 group-hover:scale-110 transition-transform" />
-                                              <span className="text-[12px] font-bold text-blue-100/90 font-mono tracking-tight">{tg}</span>
+                                              <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
+                                              <span className="text-[15px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
                                             </div>
                                           )}
                                           {ds && (
                                             <div 
-                                              className="flex items-center gap-2 px-2.5 py-1 rounded bg-indigo-500/10 border border-indigo-500/30 group/link cursor-pointer hover:bg-indigo-500/20 hover:border-indigo-500/50 transition-all shadow-sm" 
+                                              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/40 group/link cursor-pointer hover:bg-indigo-500/20 hover:border-indigo-500/60 transition-all shadow-md" 
                                               onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
                                             >
-                                              <Users className="w-3.5 h-3.5 text-indigo-400 group-hover:scale-110 transition-transform" />
-                                              <span className="text-[12px] font-bold text-indigo-100/90 font-mono tracking-tight">{ds}</span>
+                                              <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                                              <span className="text-[15px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
                                             </div>
                                           )}
                                           {!tg && !ds && !rawName && (
-                                            <span className="text-[11px] text-white/30 italic">No Identity</span>
+                                            <span className="text-[12px] text-white/30 italic">No Identity</span>
                                           )}
                                         </div>
-                                      </>
-                                    );
-                                  })()}
-                                </div>
+                                      </div>
+
+                                      {showBigName && (
+                                        <div className="pl-5 border-l border-white/10 ml-1.5 -mt-1 group-hover:border-[#D4AF37]/30 transition-colors">
+                                          <span className="text-sm font-bold text-white/90 group-hover:text-[#D4AF37] transition-colors truncate block">
+                                            {rawName}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             </td>
                             <td className="px-4 py-4 border-b border-white/5">

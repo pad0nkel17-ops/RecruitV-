@@ -29,6 +29,11 @@ export interface BoosterData {
   contactStartedOn: string | null;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   crmAccount?: string;
+  telegram?: string;
+  discord?: string;
+  games?: string;
+  workingHours?: string;
+  region?: string;
   fieldOverrides?: Record<string, any>;
   updatedAt: string;
   fields?: Record<string, any>;

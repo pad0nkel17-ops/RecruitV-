@@ -554,6 +554,7 @@ export default function App() {
       const now = new Date().toISOString();
       
       const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: value };
+      const isCoreField = ['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
       
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
@@ -562,7 +563,8 @@ export default function App() {
         const newEntry: BoosterData = existing ? {
           ...existing,
           fieldOverrides: updatedOverrides,
-          updatedAt: now
+          updatedAt: now,
+          ...(isCoreField ? { [field]: value } : {})
         } : {
           id: sId,
           formId: selectedForm,
@@ -570,7 +572,8 @@ export default function App() {
           notes: '',
           contactStartedOn: null,
           fieldOverrides: updatedOverrides,
-          updatedAt: now
+          updatedAt: now,
+          ...(isCoreField ? { [field]: value } : {})
         };
 
         await firebaseService.saveBoosterData(newEntry);
@@ -681,15 +684,15 @@ export default function App() {
           return {
             id: String(d.id),
             createdAt: d.updatedAt,
-            telegram: getFVal(['telegram', 'tg', 'contact']),
-            discord: getFVal(['discord', 'ds']),
-            games: getFVal(['games', 'game']),
-            workingHours: getFVal(['hours', 'time']),
-            region: getFVal(['region', 'country']),
+            telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
+            discord: d.discord || getFVal(['discord', 'ds']),
+            games: d.games || getFVal(['games', 'game']),
+            workingHours: d.workingHours || getFVal(['hours', 'time']),
+            region: d.region || getFVal(['region', 'country']),
             status: d.status as any,
             statusUpdatedAt: d.updatedAt,
             statusHistory: d.statusHistory || [],
-            crmAccount: d.crmAccount || '',
+            crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
             contactStartedOn: d.contactStartedOn as any,
             notes: d.notes,
             formId: d.formId,
@@ -737,7 +740,7 @@ export default function App() {
             status: (persist?.status || 'WAITING FOR RECRUITMENT') as any,
             statusUpdatedAt: persist?.updatedAt || sub.created_at,
             statusHistory: persist?.statusHistory || [],
-            crmAccount: persist?.crmAccount || '',
+            crmAccount: persist?.crmAccount || persist?.fieldOverrides?.['crmAccount'] || '',
             contactStartedOn: (persist?.contactStartedOn || null) as any,
             notes: persist?.notes || '',
             formId: idToFetch,

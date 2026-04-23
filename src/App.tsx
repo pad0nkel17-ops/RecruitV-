@@ -38,7 +38,8 @@ import {
   ChevronRight,
   Edit2,
   Zap,
-  PlusCircle
+  PlusCircle,
+  Maximize2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -201,6 +202,7 @@ interface DbSummary {
 
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
+  const [viewingBooster, setViewingBooster] = useState<Booster | null>(null);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
   const [selectedForm, setSelectedForm] = useState<string>('');
@@ -2261,6 +2263,15 @@ Added to MasterFile`;
 
                                   return (
                                     <>
+                                      <div className="mb-1">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
+                                          className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
+                                        >
+                                          <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
+                                          View
+                                        </button>
+                                      </div>
                                       <div className="flex items-center gap-2">
                                         <div className="flex items-center gap-1.5">
                                           <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
@@ -2701,6 +2712,86 @@ Added to MasterFile`;
                       Process Assignment
                     </button>
                   </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Application Detail View Modal */}
+        <AnimatePresence>
+          {viewingBooster && (
+            <div className="fixed inset-0 z-[500] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setViewingBooster(null)}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              >
+                {/* Header */}
+                <div className="bg-[#EFF6FF] px-6 py-4 border-b border-[#DBEAFE] relative">
+                  <h2 className="text-[#1E3A8A] font-bold text-lg">
+                    {viewingBooster.fields['Email'] || viewingBooster.fields['Name'] || viewingBooster.id}
+                  </h2>
+                  <p className="text-[#60A5FA] text-[11px] font-medium mt-0.5 uppercase tracking-wider">
+                    Updated at {new Date(viewingBooster.statusUpdatedAt || viewingBooster.createdAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}
+                  </p>
+                  <button 
+                    onClick={() => setViewingBooster(null)}
+                    className="absolute top-4 right-4 p-2 text-[#94A3B8] hover:text-[#475569] transition-colors rounded-lg hover:bg-black/5"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-200">
+                  {Object.entries(viewingBooster.fields).map(([label, val], idx) => {
+                    const value = String(val);
+                    if (!value || value === '—') return null;
+                    
+                    const isLongText = value.length > 80;
+                    const parts = value.split(/[,;]+/).map(p => p.trim()).filter(Boolean);
+                    const isBadgeList = parts.length > 1 && !isLongText;
+
+                    const getDetailStyles = (val: string) => {
+                      const v = val.toLowerCase();
+                      if (v.includes('full time') || v.includes('job') || v.includes('8 hours')) return "bg-[#F5F3FF] text-[#6D28D9] border-[#EDE9FE]";
+                      if (v.includes('represent') || v.includes('team') || v.includes('community')) return "bg-[#EFF6FF] text-[#2563EB] border-[#DBEAFE]";
+                      if (v.includes('eu') || v.includes('selfplay')) return "bg-[#FDF2F8] text-[#DB2777] border-[#FCE7F3]";
+                      if (v.includes('offer') || v.includes('play themself')) return "bg-[#FFF7ED] text-[#C2410C] border-[#FFEDD5]";
+                      return "bg-[#F8FAFC] text-[#475569] border-[#E2E8F0]";
+                    };
+
+                    return (
+                      <div key={idx} className="space-y-2 pb-6 border-b border-[#F1F5F9] last:border-0 last:pb-0">
+                        <h3 className="text-[#94A3B8] text-[11px] font-bold uppercase tracking-[0.1em] leading-tight">{label}</h3>
+                        <div className="flex flex-wrap gap-2">
+                          {isBadgeList ? (
+                            parts.map((p, pi) => (
+                              <span key={pi} className={cn("px-3 py-1 text-xs font-semibold rounded border", getDetailStyles(p))}>
+                                {p}
+                              </span>
+                            ))
+                          ) : (
+                            <div className={cn(
+                              "text-[#334155] text-sm leading-relaxed whitespace-pre-wrap font-medium",
+                              !isLongText && "px-3 py-1 bg-[#F8FAFC] rounded border border-[#E2E8F0]"
+                            )}>
+                              {value}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </motion.div>
             </div>

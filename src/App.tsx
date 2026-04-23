@@ -78,16 +78,20 @@ interface Booster {
   formTitle?: string;
 }
 
-const renderCellContent = (val: any, col: string) => {
+const CellContent = ({ val, col }: { val: any, col: string }) => {
+  const [expanded, setExpanded] = useState(false);
+  
   if (!val || val === '—') return <span className="text-white/40 italic">—</span>;
   
-  // Split into parts for potential multi-block rendering, but even single parts get blocks now
+  // Split into parts for potential multi-block rendering
   const parts = val.toString().split(/[,;]+/).map((p: string) => p.trim()).filter(Boolean);
   
-  // Always render using the block (pill) style for dynamic columns
+  const shouldTruncate = parts.length > 10;
+  const displayParts = (shouldTruncate && !expanded) ? parts.slice(0, 10) : parts;
+  
   return (
     <div className="flex flex-wrap gap-1.5 max-w-[300px] py-1">
-      {parts.map((p: string, i: number) => (
+      {displayParts.map((p: string, i: number) => (
         <span 
           key={i} 
           className={cn(
@@ -98,6 +102,17 @@ const renderCellContent = (val: any, col: string) => {
           {p}
         </span>
       ))}
+      {shouldTruncate && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(!expanded);
+          }}
+          className="px-2 py-0.5 rounded bg-[#D4AF37]/10 border border-[#D4AF37]/40 text-[9px] font-black uppercase tracking-[0.1em] text-[#D4AF37] hover:bg-[#D4AF37]/20 transition-all shadow-sm animate-in fade-in zoom-in duration-300"
+        >
+          {expanded ? 'Show Less' : `+${parts.length - 10} more`}
+        </button>
+      )}
     </div>
   );
 };
@@ -2352,7 +2367,7 @@ Added to MasterFile`;
                               </div>
                             </td>
                             <td className="px-3 py-3 border-b border-white/5">
-                               {renderCellContent(booster.games, 'Games')}
+                               <CellContent val={booster.games} col="Games" />
                             </td>
                             {activeTab === 'RECRUITED' && (
                               <td className="px-3 py-3 border-b border-white/5">
@@ -2443,7 +2458,7 @@ Added to MasterFile`;
                               
                               return (
                                 <td key={col} className="px-3 py-3 border-b border-white/5">
-                                  {renderCellContent(val, col)}
+                                  <CellContent val={val} col={col} />
                                 </td>
                               );
                             })}

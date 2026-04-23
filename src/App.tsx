@@ -90,7 +90,7 @@ const CellContent = ({ val, col }: { val: any, col: string }) => {
   const displayParts = (shouldTruncate && !expanded) ? parts.slice(0, 10) : parts;
   
   return (
-    <div className="flex flex-wrap gap-1.5 max-w-[300px] py-1">
+    <div className="flex flex-wrap gap-1.5 max-w-[250px] py-1">
       {displayParts.map((p: string, i: number) => (
         <span 
           key={i} 
@@ -1290,10 +1290,10 @@ Added to MasterFile`;
 
       {/* Sidebar */}
       <nav className={cn(
-        "fixed inset-y-0 left-0 z-50 w-72 bg-[#141416] border-r border-[#2D2D30] flex flex-col p-6 transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 overflow-y-auto overflow-x-hidden shadow-[10px_0_30px_rgba(0,0,0,0.3)]",
+        "fixed inset-y-0 left-0 z-50 w-64 bg-[#141416] border-r border-[#2D2D30] flex flex-col p-4 transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0 overflow-y-auto overflow-x-hidden shadow-[10px_0_30px_rgba(0,0,0,0.3)]",
         isSidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
-        <div className="font-serif italic text-2xl mb-10 text-[#D4AF37] tracking-wider flex items-center justify-between">
+        <div className="font-serif italic text-xl mb-6 text-[#D4AF37] tracking-wider flex items-center justify-between">
           <div 
             className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
             onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
@@ -1315,7 +1315,7 @@ Added to MasterFile`;
         <button
           onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
           className={cn(
-            "w-full flex items-center justify-between p-4 rounded-2xl mb-8 transition-all group shadow-lg",
+            "w-full flex items-center justify-between p-3 rounded-2xl mb-6 transition-all group shadow-lg",
             dashboardMode ? "bg-white/[0.05] ring-2 ring-[#D4AF37]/30" : "hover:bg-white/[0.02]"
           )}
         >
@@ -1334,8 +1334,8 @@ Added to MasterFile`;
         </button>
 
         {/* Form Selection */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4 border-b border-white/10 pb-2">
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
              <span className="text-[11px] uppercase tracking-widest text-white">
               Databases
             </span>
@@ -1359,7 +1359,7 @@ Added to MasterFile`;
                 <div 
                   key={form.id} 
                   className={cn(
-                    "group flex flex-col gap-2 px-4 py-3.5 rounded-2xl transition-all cursor-pointer shadow-lg",
+                    "group flex flex-col gap-1.5 px-3 py-2.5 rounded-2xl transition-all cursor-pointer shadow-lg",
                     isSelected ? "bg-[#141416] ring-2 ring-[#D4AF37]/50 shadow-[0_10px_30px_rgba(0,0,0,0.4)]" : "hover:bg-white/[0.03] active:scale-98"
                   )}
                   onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); }}
@@ -1583,7 +1583,7 @@ Added to MasterFile`;
           </div>
         )}
 
-        <header className="h-20 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-10 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-md z-30 gap-4 sm:gap-0 py-4 sm:py-0">
+        <header className="h-14 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-6 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-md z-30 gap-4 sm:gap-0 py-2 sm:py-0">
           <div className="flex items-center gap-3 text-[13px] text-white/90 w-full sm:w-auto">
             <button 
               onClick={() => setIsSidebarOpen(true)}
@@ -1677,19 +1677,19 @@ Added to MasterFile`;
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-2 sm:px-6 xl:px-10 py-6 sm:py-10 relative">
+        <div className="flex-1 overflow-y-auto px-2 sm:px-4 xl:px-6 py-4 sm:py-6 relative">
           {dashboardMode ? (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="space-y-12"
+              className="space-y-8"
             >
-              <div className="flex flex-col gap-2">
-                <h1 className="font-serif italic text-5xl text-white tracking-tight">System Dashboard</h1>
-                <p className="text-xs text-white/40 uppercase tracking-[0.4em] font-bold">Global Recruitment Overview</p>
+              <div className="flex flex-col gap-1">
+                <h1 className="font-serif italic text-4xl text-white tracking-tight">System Dashboard</h1>
+                <p className="text-[10px] text-white/40 uppercase tracking-[0.4em] font-bold">Global Recruitment Overview</p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {forms.map(form => {
                   const summary = dbSummaries[form.id];
                   const colorClass = getDbColor(form.id);
@@ -1698,12 +1698,12 @@ Added to MasterFile`;
                       key={form.id}
                       whileHover={{ y: -5, scale: 1.02 }}
                       onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); fetchData(form.id); }}
-                      className="bg-white/[0.02] border border-white/10 rounded-3xl p-8 cursor-pointer group transition-all hover:bg-white/[0.05] hover:border-[#D4AF37]/30 shadow-2xl relative overflow-hidden"
+                      className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 cursor-pointer group transition-all hover:bg-white/[0.05] hover:border-[#D4AF37]/30 shadow-2xl relative overflow-hidden"
                     >
                       <div className={cn("absolute top-0 left-0 w-1.5 h-full opacity-50 transition-all group-hover:opacity-100", colorClass.replace('text-', 'bg-'))} />
                       
                       <div className="flex flex-col h-full">
-                        <div className="flex items-start justify-between mb-8">
+                        <div className="flex items-start justify-between mb-6">
                           <div className="flex flex-col gap-1">
                              <h3 className={cn("text-xl font-black uppercase tracking-[0.2em] transition-colors leading-tight break-words", colorClass)}>
                                {form.title}
@@ -2019,19 +2019,19 @@ Added to MasterFile`;
             );
           })()}
 
-          <div className="mb-10">
-            <div className="flex flex-col gap-2 mb-8">
-              <h1 className="font-serif italic text-5xl text-[#E1E1E6] tracking-tight">
+          <div className="mb-6">
+            <div className="flex flex-col gap-1 mb-6">
+              <h1 className="font-serif italic text-4xl text-[#E1E1E6] tracking-tight">
                 {forms.find(f => f.id === selectedForm)?.title || 'Recruitment Database'}
               </h1>
-              <p className="text-xs text-white/40 uppercase tracking-[0.4em] font-bold">Booster Application Management System</p>
+              <p className="text-[10px] text-white/40 uppercase tracking-[0.4em] font-bold">Booster Application Management System</p>
             </div>
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-white/[0.03] border border-white/5 rounded-[1.5rem] w-fit overflow-x-auto no-scrollbar shadow-inner">
                 <button
                   onClick={() => setActiveTab('ALL')}
                   className={cn(
-                    "px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                    "px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
                     activeTab === 'ALL' 
                       ? "bg-[#D4AF37] text-black shadow-[0_5px_15px_rgba(212,175,55,0.4)] scale-105" 
                       : "text-white/40 hover:text-white hover:bg-white/5"
@@ -2044,7 +2044,7 @@ Added to MasterFile`;
                     key={status}
                     onClick={() => setActiveTab(status)}
                     className={cn(
-                      "px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                      "px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
                       activeTab === status 
                         ? "bg-[#D4AF37] text-black shadow-[0_5px_15px_rgba(212,175,55,0.4)] scale-105" 
                         : "text-white/40 hover:text-white hover:bg-white/5"
@@ -2056,8 +2056,8 @@ Added to MasterFile`;
               </div>
 
               {/* Enhanced Notification Summary for Database View */}
-              <div className="flex items-center gap-4 bg-[#141416]/50 border border-white/5 px-6 py-3 rounded-3xl backdrop-blur-xl">
-                 <div className="flex items-center gap-2 pr-4 border-r border-white/5">
+              <div className="flex items-center gap-4 bg-[#141416]/50 border border-white/5 px-4 py-2 rounded-3xl backdrop-blur-xl">
+                 <div className="flex items-center gap-2 pr-3 border-r border-white/5">
                    <Layout className="w-3.5 h-3.5 text-[#D4AF37]" />
                    <span className="text-[12px] font-black text-white/70 uppercase tracking-widest">Pool Status</span>
                  </div>
@@ -2166,7 +2166,7 @@ Added to MasterFile`;
               <table className="min-w-max w-full border-separate border-spacing-0">
                 <thead>
                   <tr className="bg-[#0A0A0B]/80 backdrop-blur-md">
-                    <th className="sticky top-0 left-0 z-50 bg-[#0A0A0B] px-3 py-3 text-left border-b border-white/10 rounded-tl-[2.5rem]">
+                    <th className="sticky top-0 left-0 z-50 bg-[#0A0A0B] px-3 py-2.5 text-left border-b border-white/10 rounded-tl-[2.5rem]">
                       <div 
                         onClick={() => {
                           if (selectedBoosterIds.size === filteredBoosters.length) {
@@ -2185,32 +2185,32 @@ Added to MasterFile`;
                         {selectedBoosterIds.size === filteredBoosters.length && filteredBoosters.length > 0 && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Booster Identity & Contacts
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Games & Skills
                     </th>
                     {activeTab === 'RECRUITED' && (
-                      <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-[#D4AF37] border-b border-white/10 whitespace-nowrap">
+                      <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-[#D4AF37] border-b border-white/10 whitespace-nowrap">
                          Master Info
                       </th>
                     )}
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Progress
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        CRM ACCOUNT
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Region & Meta
                     </th>
                     {dynamicColumns.map(col => (
-                      <th key={col} className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 max-w-[180px]">
+                      <th key={col} className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 max-w-[180px]">
                         {getColumnName(col)}
                       </th>
                     ))}
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 rounded-tr-[2.5rem]">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-2.5 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 rounded-tr-[2.5rem]">
                        Actions
                     </th>
                   </tr>
@@ -2236,21 +2236,21 @@ Added to MasterFile`;
                               selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
                             )}
                           >
-                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-3 border-b border-white/5 transition-colors">
+                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
                               <div 
                                 onClick={() => toggleBoosterSelection(booster.id)}
                                 className={cn(
-                                  "w-5 h-5 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
                                   selectedBoosterIds.has(booster.id) 
                                     ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
                                     : "border-white/10 group-hover:border-[#D4AF37]/40"
                                 )}
                               >
-                                {selectedBoosterIds.has(booster.id) && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
                               </div>
                             </td>
-                            <td className="px-3 py-3 border-b border-white/5">
-                              <div className="flex flex-col gap-2 min-w-[170px]">
+                            <td className="px-3 py-2 border-b border-white/5">
+                              <div className="flex flex-col gap-1.5 min-w-[170px]">
                                 {(() => {
                                   const rawName = booster.fields?.['Name/Contact'] || '';
                                   const tg = booster.telegram || '';
@@ -2285,12 +2285,12 @@ Added to MasterFile`;
                                         
                                         <span className="text-white/20 font-light select-none">:</span>
                                         
-                                        <div className="flex flex-wrap gap-2">
+                                        <div className="flex flex-wrap gap-1.5">
                                           {tg && (
                                             <div className="flex flex-col items-center gap-1">
                                               <div 
                                                 className={cn(
-                                                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                                                  "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
                                                   booster.contactStartedOn === 'TELEGRAM' 
                                                     ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
                                                     : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
@@ -2321,7 +2321,7 @@ Added to MasterFile`;
                                             <div className="flex flex-col items-center gap-1">
                                               <div 
                                                 className={cn(
-                                                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                                                  "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
                                                   booster.contactStartedOn === 'DISCORD'
                                                     ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
                                                     : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
@@ -2366,11 +2366,11 @@ Added to MasterFile`;
                                 })()}
                               </div>
                             </td>
-                            <td className="px-3 py-3 border-b border-white/5">
+                            <td className="px-3 py-2 border-b border-white/5">
                                <CellContent val={booster.games} col="Games" />
                             </td>
                             {activeTab === 'RECRUITED' && (
-                              <td className="px-3 py-3 border-b border-white/5">
+                              <td className="px-3 py-2 border-b border-white/5">
                                 <button
                                   onClick={() => copyMasterInfo(booster)}
                                   className={cn(
@@ -2394,7 +2394,7 @@ Added to MasterFile`;
                                 </button>
                               </td>
                             )}
-                            <td className="px-3 py-3 border-b border-white/5">
+                            <td className="px-3 py-2 border-b border-white/5">
                               <div className="flex flex-col gap-1.5">
                                 <div className={cn(
                                   "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm",
@@ -2409,19 +2409,19 @@ Added to MasterFile`;
                                 )}
                               </div>
                             </td>
-                            <td className="px-3 py-3 border-b border-white/5">
+                            <td className="px-3 py-2 border-b border-white/5">
                               <div 
                                 onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
                                 className={cn(
-                                  "group/crm px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
+                                  "group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
                                   booster.crmAccount 
                                     ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
                                     : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
                                 )}
                               >
                                 <span className={cn(
-                                  "text-[13px] uppercase font-bold tracking-wider truncate",
-                                  !booster.crmAccount && "italic font-normal text-[11px]"
+                                  "text-[12px] uppercase font-bold tracking-wider truncate",
+                                  !booster.crmAccount && "italic font-normal text-[10px]"
                                 )}>
                                   {booster.crmAccount || 'Not Assigned'}
                                 </span>
@@ -2442,13 +2442,13 @@ Added to MasterFile`;
                                 </div>
                               </div>
                             </td>
-                            <td className="px-3 py-3 border-b border-white/5">
+                            <td className="px-3 py-2 border-b border-white/5">
                               <div className="flex flex-col gap-0.5">
-                                <div className="flex items-center gap-2">
-                                     <Globe className="w-2.5 h-2.5 text-[#D4AF37]/70" />
-                                     <span className="text-[11px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
+                                <div className="flex items-center gap-1.5">
+                                     <Globe className="w-2 h-2 text-[#D4AF37]/70" />
+                                     <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
                                   </div>
-                                  <span className="text-[10px] text-white/40 font-mono ml-4.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
+                                  <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
                                </div>
                             </td>
                             {dynamicColumns.map(col => {
@@ -2457,12 +2457,12 @@ Added to MasterFile`;
                                          (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
                               
                               return (
-                                <td key={col} className="px-3 py-3 border-b border-white/5">
+                                <td key={col} className="px-3 py-2 border-b border-white/5">
                                   <CellContent val={val} col={col} />
                                 </td>
                               );
                             })}
-                            <td className="px-3 py-3 border-b border-white/5 text-right">
+                            <td className="px-3 py-2 border-b border-white/5 text-right">
                                <div className="flex items-center justify-end gap-2">
                                   <div className="relative group/status-pick inline-block">
                                     <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">
@@ -2483,7 +2483,7 @@ Added to MasterFile`;
                                   <button 
                                     onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes || '' })}
                                     className={cn(
-                                      "p-2.5 rounded-xl border transition-all relative shadow-sm hover:scale-105 active:scale-95",
+                                      "p-1.5 rounded-xl border transition-all relative shadow-sm hover:scale-105 active:scale-95",
                                       booster.notes 
                                         ? "bg-amber-500/10 border-amber-500/30 text-amber-500 hover:shadow-[0_0_15px_rgba(245,158,11,0.15)]" 
                                         : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"

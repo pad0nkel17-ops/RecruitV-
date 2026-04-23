@@ -2150,21 +2150,65 @@ export default function App() {
                                         
                                         <div className="flex flex-wrap gap-2">
                                           {tg && (
-                                            <div 
-                                              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/40 group/link cursor-pointer hover:bg-blue-500/20 hover:border-blue-500/60 transition-all shadow-md" 
-                                              onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
-                                            >
-                                              <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
-                                              <span className="text-[15px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
+                                            <div className="flex flex-col items-center gap-1">
+                                              <div 
+                                                className={cn(
+                                                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                                                  booster.contactStartedOn === 'TELEGRAM' 
+                                                    ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
+                                                    : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
+                                                )}
+                                                onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
+                                              >
+                                                <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
+                                                <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
+                                              </div>
+                                              <button 
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  updateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM');
+                                                }}
+                                                className={cn(
+                                                  "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                                                  booster.contactStartedOn === 'TELEGRAM'
+                                                    ? "bg-blue-500 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                                                    : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10"
+                                                )}
+                                                title="Mark as Contacted via Telegram"
+                                              >
+                                                <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'TELEGRAM' ? "stroke-[4]" : "stroke-[2]")} />
+                                              </button>
                                             </div>
                                           )}
                                           {ds && (
-                                            <div 
-                                              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/40 group/link cursor-pointer hover:bg-indigo-500/20 hover:border-indigo-500/60 transition-all shadow-md" 
-                                              onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
-                                            >
-                                              <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-                                              <span className="text-[15px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
+                                            <div className="flex flex-col items-center gap-1">
+                                              <div 
+                                                className={cn(
+                                                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                                                  booster.contactStartedOn === 'DISCORD'
+                                                    ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
+                                                    : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
+                                                )}
+                                                onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
+                                              >
+                                                <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                                                <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
+                                              </div>
+                                              <button 
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  updateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD');
+                                                }}
+                                                className={cn(
+                                                  "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                                                  booster.contactStartedOn === 'DISCORD'
+                                                    ? "bg-indigo-500 border-indigo-400 text-white shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+                                                    : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/10"
+                                                )}
+                                                title="Mark as Contacted via Discord"
+                                              >
+                                                <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'DISCORD' ? "stroke-[4]" : "stroke-[2]")} />
+                                              </button>
                                             </div>
                                           )}
                                           {!tg && !ds && !rawName && (

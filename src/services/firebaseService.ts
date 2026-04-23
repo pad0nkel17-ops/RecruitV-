@@ -92,6 +92,11 @@ export const firebaseService = {
     return snapshot.docs.map(d => d.data() as BoosterData);
   },
 
+  async getAllBoosterData(): Promise<BoosterData[]> {
+    const snapshot = await getDocs(collection(db, BOOSTER_DATA_COL));
+    return snapshot.docs.map(d => d.data() as BoosterData);
+  },
+
   async saveBoosterData(data: BoosterData) {
     await setDoc(doc(db, BOOSTER_DATA_COL, data.id), data);
   },

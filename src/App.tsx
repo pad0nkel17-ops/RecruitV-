@@ -67,7 +67,7 @@ interface Booster {
   games: string;
   workingHours: string;
   region: string;
-  status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE' | 'REJECTED';
+  status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE' | 'REJECTED' | 'DUPLICATION';
   statusUpdatedAt: string;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   crmAccount?: string;
@@ -152,6 +152,7 @@ const STATUS_CONFIG = {
   'LOST': { color: 'bg-rose-500/10 text-rose-500 border-rose-500/20 shadow-[0_4px_12px_rgba(244,63,94,0.1)]', icon: UserMinus, funnelLabel: 'Lost' },
   'RESERVE': { color: 'bg-pink-500/10 text-pink-400 border-pink-500/20 shadow-[0_4px_12px_rgba(236,72,153,0.1)]', icon: Users, funnelLabel: 'Reserve' },
   'REJECTED': { color: 'bg-red-500/10 text-red-500 border-red-500/20 shadow-[0_4px_12px_rgba(239,68,68,0.1)]', icon: AlertCircle, funnelLabel: 'Rejected' },
+  'DUPLICATION': { color: 'bg-purple-500/10 text-purple-400 border-purple-500/20 shadow-[0_4px_12px_rgba(168,85,247,0.1)]', icon: Copy, funnelLabel: 'Duplication' },
 };
 
 const DB_COLORS = [
@@ -757,6 +758,11 @@ export default function App() {
       localStorage.setItem(`cache_boosters_${idToFetch}`, JSON.stringify(merged));
       localStorage.setItem(`cache_time_${idToFetch}`, new Date().toISOString());
 
+      // Check for duplicates in background if new entries arrived
+      if (jotformSubs.length > 0) {
+        setTimeout(() => scanGlobalDuplicates(true), 2000);
+      }
+
       // Update summary counts
       const summaries = { ...dbSummaries };
       summaries[idToFetch] = {
@@ -1005,6 +1011,103 @@ export default function App() {
     } catch (err) {
       console.error('Failed to update contact info');
     }
+  };
+
+  const scanGlobalDuplicates = async (silent = false) => {
+    try {
+      if (!silent) {
+        setRefreshing(true);
+        setNotification({ message: 'Analyzing recruitment pool for duplications...', type: 'INFO' });
+      }
+      
+      const allData = await firebaseService.getAllBoosterData();
+      
+      const tgMap = new Map<string, {id: string, date: number}[]>();
+      const dsMap = new Map<string, {id: string, date: number}[]>();
+      
+      allData.forEach(d => {
+        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || '').toString().toLowerCase().trim();
+        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || '').toString().toLowerCase().trim();
+        const date = new Date(d.updatedAt || 0).getTime();
+        
+        if (tg && tg !== '—' && tg.length > 2) {
+          tgMap.set(tg, [...(tgMap.get(tg) || []), {id: d.id, date}]);
+        }
+        if (ds && ds !== '—' && ds.length > 2) {
+          dsMap.set(ds, [...(dsMap.get(ds) || []), {id: d.id, date}]);
+        }
+      });
+      
+      const duplicates = new Set<string>();
+      
+      const findDuplicates = (map: Map<string, {id: string, date: number}[]>) => {
+        map.forEach((records) => {
+          if (records.length > 1) {
+            records.sort((a, b) => a.date - b.date);
+            records.slice(1).forEach(r => duplicates.add(r.id));
+          }
+        });
+      };
+      
+      findDuplicates(tgMap);
+      findDuplicates(dsMap);
+      
+      let updateCount = 0;
+      for (const id of Array.from(duplicates)) {
+        const item = allData.find(d => d.id === id);
+        if (item && item.status !== 'DUPLICATION' && !['RECRUITED', 'LOST', 'REJECTED'].includes(item.status)) {
+          await firebaseService.updateBoosterStatus(id, item.formId, 'DUPLICATION');
+          updateCount++;
+        }
+      }
+      
+      if (!silent) {
+        setNotification({ 
+          message: updateCount > 0 
+            ? `Cleaning complete. Marked ${updateCount} new duplications.` 
+            : `System healthy. No new duplicates found.`, 
+          type: 'SUCCESS' 
+        });
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Duplicate scan failed:', err);
+      if (!silent) setNotification({ message: 'Duplicate scan failed.', type: 'ERROR' });
+    } finally {
+      if (!silent) setRefreshing(false);
+    }
+  };
+
+  const copyMasterInfo = (booster: Booster) => {
+    const getF = (keys: string[]) => {
+      const fieldKey = Object.keys(booster.fields || {}).find(k => 
+        keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
+      );
+      return fieldKey ? booster.fields[fieldKey] : '';
+    };
+
+    const specialty = getF(['specialty', 'specialization', 'skills', 'role']);
+    const platform = getF(['platform', 'device', 'console']);
+    const stream = getF(['stream', 'twitch', 'youtube']);
+    const pvp = getF(['pvp', 'arena', 'rating']);
+
+    const text = `CRM: ${booster.crmAccount || ''}
+    
+Telegram: ${booster.telegram || ''}
+Discord: ${booster.discord || ''}
+
+Region: 
+Games: ${booster.games || ''}
+Specialty : ${specialty}
+Working hours: 
+Platform: ${platform}
+Stream: 
+PvP: ${pvp || '-'}
+Additional notes: ${booster.notes || 'Verified / | AD'}
+
+Added to MasterFile`;
+
+    copyToClipboard(text, `master-${booster.id}`);
   };
 
   const filteredBoosters = useMemo(() => {
@@ -1964,6 +2067,14 @@ export default function App() {
                      </div>
                    );
                  })()}
+                 <button 
+                  onClick={() => scanGlobalDuplicates()}
+                  className="flex items-center gap-2 px-4 py-1.5 ml-4 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 text-[#D4AF37] text-[10px] font-black uppercase tracking-widest hover:bg-[#D4AF37]/20 transition-all shadow-sm group/scan"
+                  title="Scan and Mark Global Duplicates"
+                >
+                  <Copy className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                  Clean Pool
+                </button>
               </div>
             </div>
           </div>
@@ -2040,7 +2151,7 @@ export default function App() {
               <table className="min-w-max w-full border-separate border-spacing-0">
                 <thead>
                   <tr className="bg-[#0A0A0B]/80 backdrop-blur-md">
-                    <th className="sticky top-0 left-0 z-50 bg-[#0A0A0B] px-4 py-4 text-left border-b border-white/10 rounded-tl-[2.5rem]">
+                    <th className="sticky top-0 left-0 z-50 bg-[#0A0A0B] px-3 py-3 text-left border-b border-white/10 rounded-tl-[2.5rem]">
                       <div 
                         onClick={() => {
                           if (selectedBoosterIds.size === filteredBoosters.length) {
@@ -2059,28 +2170,33 @@ export default function App() {
                         {selectedBoosterIds.size === filteredBoosters.length && filteredBoosters.length > 0 && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Booster Identity & Contacts
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Games & Skills
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    {activeTab === 'RECRUITED' && (
+                      <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-[#D4AF37] border-b border-white/10 whitespace-nowrap">
+                         Master Info
+                      </th>
+                    )}
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Progress
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        CRM ACCOUNT
                     </th>
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 whitespace-nowrap">
                        Region & Meta
                     </th>
                     {dynamicColumns.map(col => (
-                      <th key={col} className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 max-w-[200px]">
+                      <th key={col} className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-left text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 max-w-[180px]">
                         {getColumnName(col)}
                       </th>
                     ))}
-                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-4 py-4 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 rounded-tr-[2.5rem]">
-                      Actions
+                    <th className="sticky top-0 z-40 bg-[#0A0A0B] px-3 py-3 text-right text-xs font-black uppercase tracking-[0.2em] text-white/60 border-b border-white/10 rounded-tr-[2.5rem]">
+                       Actions
                     </th>
                   </tr>
                 </thead>
@@ -2105,7 +2221,7 @@ export default function App() {
                               selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
                             )}
                           >
-                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-4 py-4 border-b border-white/5 transition-colors">
+                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-3 border-b border-white/5 transition-colors">
                               <div 
                                 onClick={() => toggleBoosterSelection(booster.id)}
                                 className={cn(
@@ -2118,8 +2234,8 @@ export default function App() {
                                 {selectedBoosterIds.has(booster.id) && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                               </div>
                             </td>
-                            <td className="px-4 py-4 border-b border-white/5">
-                              <div className="flex flex-col gap-2.5 min-w-[200px]">
+                            <td className="px-3 py-3 border-b border-white/5">
+                              <div className="flex flex-col gap-2 min-w-[170px]">
                                 {(() => {
                                   const rawName = booster.fields?.['Name/Contact'] || '';
                                   const tg = booster.telegram || '';
@@ -2143,6 +2259,12 @@ export default function App() {
                                             </div>
                                           ) : (
                                             <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
+                                          )}
+                                          {booster.status === 'DUPLICATION' && (
+                                            <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
+                                              <Copy className="w-2.5 h-2.5" />
+                                              Duplicate
+                                            </div>
                                           )}
                                         </div>
                                         
@@ -2229,10 +2351,35 @@ export default function App() {
                                 })()}
                               </div>
                             </td>
-                            <td className="px-4 py-4 border-b border-white/5">
+                            <td className="px-3 py-3 border-b border-white/5">
                                {renderCellContent(booster.games, 'Games')}
                             </td>
-                            <td className="px-4 py-4 border-b border-white/5">
+                            {activeTab === 'RECRUITED' && (
+                              <td className="px-3 py-3 border-b border-white/5">
+                                <button
+                                  onClick={() => copyMasterInfo(booster)}
+                                  className={cn(
+                                    "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm border",
+                                    copiedId === `master-${booster.id}`
+                                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
+                                      : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/20"
+                                  )}
+                                >
+                                  {copiedId === `master-${booster.id}` ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5" />
+                                      Copied
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="w-3.5 h-3.5" />
+                                      Copy for Master
+                                    </>
+                                  )}
+                                </button>
+                              </td>
+                            )}
+                            <td className="px-3 py-3 border-b border-white/5">
                               <div className="flex flex-col gap-1.5">
                                 <div className={cn(
                                   "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm",
@@ -2247,11 +2394,11 @@ export default function App() {
                                 )}
                               </div>
                             </td>
-                            <td className="px-4 py-4 border-b border-white/5">
+                            <td className="px-3 py-3 border-b border-white/5">
                               <div 
                                 onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
                                 className={cn(
-                                  "group/crm px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[160px]",
+                                  "group/crm px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
                                   booster.crmAccount 
                                     ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
                                     : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
@@ -2280,7 +2427,7 @@ export default function App() {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-4 py-4 border-b border-white/5">
+                            <td className="px-3 py-3 border-b border-white/5">
                               <div className="flex flex-col gap-0.5">
                                 <div className="flex items-center gap-2">
                                      <Globe className="w-2.5 h-2.5 text-[#D4AF37]/70" />
@@ -2295,12 +2442,12 @@ export default function App() {
                                          (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
                               
                               return (
-                                <td key={col} className="px-4 py-4 border-b border-white/5">
+                                <td key={col} className="px-3 py-3 border-b border-white/5">
                                   {renderCellContent(val, col)}
                                 </td>
                               );
                             })}
-                            <td className="px-4 py-4 border-b border-white/5 text-right">
+                            <td className="px-3 py-3 border-b border-white/5 text-right">
                                <div className="flex items-center justify-end gap-2">
                                   <div className="relative group/status-pick inline-block">
                                     <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">

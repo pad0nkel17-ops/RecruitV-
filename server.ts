@@ -15,7 +15,7 @@ const router = express.Router();
 // Jotform Proxy Routes (Local Dev Only - Vercel use api/*.ts)
 router.get('/jotform-forms', async (req, res) => {
   try {
-    const apiKey = process.env.JOTFORM_API_KEY;
+    const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!apiKey) return res.json({ content: [] });
     
     let response;
@@ -33,7 +33,7 @@ router.get('/jotform-forms', async (req, res) => {
 router.get('/jotform-submissions', async (req, res) => {
   try {
     const { formId } = req.query;
-    const apiKey = process.env.JOTFORM_API_KEY;
+    const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
     
     let response;
@@ -49,6 +49,28 @@ router.get('/jotform-submissions', async (req, res) => {
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch submissions' });
+  }
+});
+
+router.get('/jotform-questions', async (req, res) => {
+  try {
+    const { formId } = req.query;
+    const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
+    if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
+    
+    let response;
+    try {
+      response = await axios.get(`https://eu-api.jotform.com/form/${formId}/questions`, { 
+        params: { apiKey } 
+      });
+    } catch (e) {
+      response = await axios.get(`https://api.jotform.com/form/${formId}/questions`, { 
+        params: { apiKey } 
+      });
+    }
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch questions' });
   }
 });
 

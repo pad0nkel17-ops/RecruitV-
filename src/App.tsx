@@ -229,6 +229,7 @@ export default function App() {
   const [configStatus, setConfigStatus] = useState<string>('ALL');
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
   const [jotformKey, setJotformKey] = useState('');
+  const [availableGames, setAvailableGames] = useState<string[]>([]);
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
@@ -662,9 +663,51 @@ export default function App() {
     return Array.from(fields).filter(f => !excluded.some(ex => f.toLowerCase().includes(ex)));
   }, [boosters]);
 
+  const fetchAvailableGames = async (formId: string) => {
+    if (!formId || formId.startsWith('local_')) return;
+    try {
+      const headers: any = {};
+      const fbSettings = await firebaseService.getSettings();
+      const currentKey = fbSettings?.jotformApiKey || jotformKey;
+      if (currentKey) headers['x-jotform-api-key'] = currentKey;
+      
+      const resp = await axios.get('/api/jotform-questions', { params: { formId }, headers });
+      const questions = resp.data.content || {};
+      
+      const gameQuestion = Object.values(questions).find((q: any) => 
+        ((q.text || '').toLowerCase().includes('game') || (q.text || '').toLowerCase().includes('skill')) && 
+        ((q.options || q.items) || (q.text || '').toLowerCase().includes('select'))
+      );
+      
+      if (gameQuestion) {
+        let optionsStr = (gameQuestion as any).options || (gameQuestion as any).items || '';
+        if (optionsStr) {
+          const options = optionsStr.split('|').map((o: string) => o.trim()).filter(Boolean);
+          setAvailableGames(options);
+          return;
+        }
+      }
+      
+      // Fallback: search for any checkboxes/dropdowns
+      const anyOptionQuestion = Object.values(questions).find((q: any) => 
+        (q.type === 'control_checkbox' || q.type === 'control_dropdown') && 
+        (q.options || '').split('|').length > 3
+      );
+      
+      if (anyOptionQuestion) {
+        const options = (anyOptionQuestion as any).options.split('|').map((o: string) => o.trim()).filter(Boolean);
+        setAvailableGames(options);
+      }
+    } catch (e) {
+      console.error('Failed to fetch jotform questions', e);
+    }
+  };
+
   const fetchData = async (formIdTarget?: string) => {
     const idToFetch = formIdTarget || selectedForm;
     if (!idToFetch) return;
+    
+    fetchAvailableGames(idToFetch);
     
     try {
       setRefreshing(true);
@@ -1131,6 +1174,7 @@ Stream:
 PvP: ${pvp || '-'}
 Additional notes: ${booster.notes || 'Verified / | AD'}
 
+Telegram marking : ${booster.crmAccount || ''}
 Added to MasterFile`;
 
     copyToClipboard(text, `master-${booster.id}`);
@@ -2386,8 +2430,14 @@ Added to MasterFile`;
                                 })()}
                               </div>
                             </td>
-                            <td className="px-3 py-2 border-b border-white/5">
-                               <CellContent val={booster.games} col="Games" />
+                            <td 
+                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games"
+                              onClick={() => setEditingCell({ id: booster.id, field: 'games', value: booster.games || '' })}
+                            >
+                               <div className="flex items-center justify-between gap-1">
+                                 <CellContent val={booster.games} col="Games" />
+                                 <Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37] transition-all" />
+                               </div>
                             </td>
                             {activeTab === 'RECRUITED' && (
                               <td className="px-3 py-2 border-b border-white/5">
@@ -2856,7 +2906,7 @@ Added to MasterFile`;
                 <div className="space-y-4">
                   <div>
                     <label className="text-[11px] text-white/70 uppercase tracking-[0.2em] mb-2 block font-bold pl-1">
-                      {editingCell.field === 'notes' ? 'Record Notes' : `Value for ${editingCell.field}`}
+                      {editingCell.field === 'notes' ? 'Record Notes' : editingCell.field === 'games' ? 'Select Portfolio Games' : `Value for ${editingCell.field}`}
                     </label>
                     {editingCell.field === 'notes' ? (
                       <textarea
@@ -2867,6 +2917,59 @@ Added to MasterFile`;
                         value={editingCell.value}
                         onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
                       />
+                    ) : editingCell.field === 'games' ? (
+                      <div className="space-y-4">
+                         <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
+                            {availableGames.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-1.5">
+                                {[...availableGames].sort((a, b) => a.localeCompare(b)).map((game, i) => {
+                                  const currentGames = editingCell.value.split(/[,;]+/).map(g => g.trim()).filter(Boolean);
+                                  const isSelected = currentGames.includes(game);
+                                  return (
+                                    <div 
+                                      key={i}
+                                      onClick={() => {
+                                        const newGames = isSelected 
+                                          ? currentGames.filter(g => g !== game)
+                                          : [...currentGames, game];
+                                        setEditingCell({ ...editingCell, value: newGames.join(', ') });
+                                      }}
+                                      className={cn(
+                                        "flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all",
+                                        isSelected 
+                                          ? "bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]" 
+                                          : "bg-white/5 border-white/10 text-white/40 hover:bg-white/10"
+                                      )}
+                                    >
+                                      <div className={cn(
+                                        "w-4 h-4 rounded border flex items-center justify-center transition-all",
+                                        isSelected ? "bg-[#D4AF37] border-[#D4AF37] text-black" : "border-white/20"
+                                      )}>
+                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                      </div>
+                                      <span className="text-[11px] font-bold uppercase tracking-widest">{game}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="flex flex-col items-center justify-center py-6 text-white/20">
+                                <Gamepad2 className="w-8 h-8 mb-2 opacity-10" />
+                                <p className="text-[10px] uppercase font-bold tracking-widest">Connect Jotform to see options</p>
+                              </div>
+                            )}
+                         </div>
+                         <div className="pt-2 border-t border-white/10">
+                            <label className="text-[10px] text-white/40 uppercase tracking-widest mb-2 block font-bold">Manual Entry / Override</label>
+                            <input
+                              type="text"
+                              className="w-full bg-[#0A0A0B] border border-[#2D2D30] rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20 transition-all shadow-inner"
+                              placeholder="Comma separated games..."
+                              value={editingCell.value}
+                              onChange={(e) => setEditingCell({ ...editingCell, value: e.target.value })}
+                            />
+                         </div>
+                      </div>
                     ) : (
                       <input
                         autoFocus

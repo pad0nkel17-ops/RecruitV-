@@ -203,6 +203,7 @@ interface DbSummary {
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [viewingBooster, setViewingBooster] = useState<Booster | null>(null);
+  const [statusPickerBoosterId, setStatusPickerBoosterId] = useState<string | null>(null);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
   const [selectedForm, setSelectedForm] = useState<string>('');
@@ -247,6 +248,14 @@ export default function App() {
   const [scrollPercent, setScrollPercent] = useState(0);
 
   const [notification, setNotification] = useState<{ message: string, type: 'SUCCESS' | 'ERROR' } | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setStatusPickerBoosterId(null);
+    };
+    window.addEventListener('click', handleClickOutside);
+    return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (notification) {
@@ -2406,13 +2415,38 @@ Added to MasterFile`;
                               </td>
                             )}
                             <td className="px-3 py-2 border-b border-white/5">
-                              <div className="flex flex-col gap-1.5">
-                                <div className={cn(
-                                  "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm",
-                                  statusConfig?.color
-                                )}>
+                              <div className="flex flex-col gap-1.5 relative">
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setStatusPickerBoosterId(statusPickerBoosterId === booster.id ? null : booster.id);
+                                  }}
+                                  className={cn(
+                                    "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all hover:scale-105 active:scale-95",
+                                    statusConfig?.color
+                                  )}
+                                >
                                   {statusConfig?.funnelLabel || booster.status}
-                                </div>
+                                </button>
+
+                                {statusPickerBoosterId === booster.id && (
+                                  <div className="absolute left-0 top-full mt-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl z-[100] py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                    {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+                                      <button
+                                        key={status}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          updateStatus(booster.id, status as any);
+                                          setStatusPickerBoosterId(null);
+                                        }}
+                                        className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
+                                      >
+                                        {STATUS_CONFIG[status].funnelLabel}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                
                                 {booster.statusHistory && booster.statusHistory.length > 0 && (
                                   <span className="text-[10px] text-emerald-400/70 font-mono tracking-tighter">
                                     {new Date(booster.statusHistory[booster.statusHistory.length - 1].timestamp).toLocaleDateString()}

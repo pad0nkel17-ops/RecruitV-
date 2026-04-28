@@ -48,6 +48,7 @@ export interface Settings {
   blacklistForms: string[];
   fieldSettings: Record<string, any>;
   jotformApiKey?: string;
+  availableGames?: string[];
 }
 
 const FORMS_COL = 'forms';

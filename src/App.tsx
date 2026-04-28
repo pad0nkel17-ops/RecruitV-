@@ -374,10 +374,12 @@ export default function App() {
       const fSettings = fbSettings?.fieldSettings || {};
       const colRenames = fbSettings?.columnRenames || {};
       const jfKey = fbSettings?.jotformApiKey || '';
+      const cachedGames = fbSettings?.availableGames || [];
 
       setFieldSettings(fSettings);
       setColumnRenames(colRenames);
       setJotformKey(jfKey);
+      setAvailableGames(cachedGames);
 
       // 2. Get local forms from Firebase
       const fbLocalForms = await firebaseService.getForms();
@@ -675,28 +677,41 @@ export default function App() {
       const questions = resp.data.content || {};
       
       const gameQuestion = Object.values(questions).find((q: any) => 
-        ((q.text || '').toLowerCase().includes('game') || (q.text || '').toLowerCase().includes('skill')) && 
-        ((q.options || q.items) || (q.text || '').toLowerCase().includes('select'))
+        ((q.text || '').toLowerCase().includes('game') || (q.text || '').toLowerCase().includes('skill') || (q.text || '').toLowerCase().includes('portfolio')) && 
+        ((q.options || q.items) || (q.text || '').toLowerCase().includes('select') || q.type === 'control_checkbox' || q.type === 'control_dropdown')
       );
       
+      let options: string[] = [];
+
       if (gameQuestion) {
         let optionsStr = (gameQuestion as any).options || (gameQuestion as any).items || '';
         if (optionsStr) {
-          const options = optionsStr.split('|').map((o: string) => o.trim()).filter(Boolean);
-          setAvailableGames(options);
-          return;
+          options = optionsStr.split('|').map((o: string) => o.trim()).filter(Boolean);
         }
       }
       
-      // Fallback: search for any checkboxes/dropdowns
-      const anyOptionQuestion = Object.values(questions).find((q: any) => 
-        (q.type === 'control_checkbox' || q.type === 'control_dropdown') && 
-        (q.options || '').split('|').length > 3
-      );
+      // Fallback: search for any checkboxes/dropdowns if still empty
+      if (options.length === 0) {
+        const anyOptionQuestion = Object.values(questions).find((q: any) => 
+          (q.type === 'control_checkbox' || q.type === 'control_dropdown') && 
+          (q.options || '').split('|').length > 3
+        );
+        
+        if (anyOptionQuestion) {
+          options = (anyOptionQuestion as any).options.split('|').map((o: string) => o.trim()).filter(Boolean);
+        }
+      }
+
+      // Hardcoded fallbacks if Jotform returns nothing but we want to provide something
+      const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
       
-      if (anyOptionQuestion) {
-        const options = (anyOptionQuestion as any).options.split('|').map((o: string) => o.trim()).filter(Boolean);
-        setAvailableGames(options);
+      const finalGames = options.length > 0 ? options : (availableGames.length > 0 ? availableGames : hardcodedFallbacks);
+      
+      setAvailableGames(finalGames);
+      
+      // Save globally if we found something new or it was empty
+      if (options.length > 0) {
+        await firebaseService.updateSettings({ availableGames: options });
       }
     } catch (e) {
       console.error('Failed to fetch jotform questions', e);
@@ -2953,14 +2968,31 @@ Added to MasterFile`;
                                 })}
                               </div>
                             ) : (
-                              <div className="flex flex-col items-center justify-center py-6 text-white/20">
-                                <Gamepad2 className="w-8 h-8 mb-2 opacity-10" />
-                                <p className="text-[10px] uppercase font-bold tracking-widest">Connect Jotform to see options</p>
+                              <div className="flex flex-col items-center justify-center py-10 text-white/20 border border-dashed border-white/10 rounded-xl">
+                                <Gamepad2 className="w-10 h-10 mb-3 opacity-10" />
+                                <p className="text-[11px] uppercase font-bold tracking-widest mb-1 text-white/40">No options found</p>
+                                <p className="text-[9px] uppercase tracking-widest text-white/20 mb-4">Check Jotform connection or use manual entry</p>
+                                <button 
+                                  onClick={() => fetchAvailableGames(selectedForm)}
+                                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white/60 text-[10px] font-bold uppercase tracking-widest rounded-lg border border-white/10 transition-all flex items-center gap-2"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  Try Re-fetching
+                                </button>
                               </div>
                             )}
                          </div>
                          <div className="pt-2 border-t border-white/10">
-                            <label className="text-[10px] text-white/40 uppercase tracking-widest mb-2 block font-bold">Manual Entry / Override</label>
+                            <div className="flex items-center justify-between mb-2">
+                               <label className="text-[10px] text-white/40 uppercase tracking-widest font-bold">Manual Entry / Override</label>
+                               <button 
+                                  onClick={() => fetchAvailableGames(selectedForm)}
+                                  className="text-[9px] text-[#D4AF37] hover:underline uppercase font-bold tracking-tighter flex items-center gap-1"
+                               >
+                                 <RefreshCw className="w-2.5 h-2.5" />
+                                 Refresh List
+                               </button>
+                            </div>
                             <input
                               type="text"
                               className="w-full bg-[#0A0A0B] border border-[#2D2D30] rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20 transition-all shadow-inner"

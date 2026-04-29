@@ -202,49 +202,73 @@ const StatusPickerPortal = ({ boosterId, anchorRect, onSelect, onClose }: {
 }) => {
   const dropdownRef = useRef<HTMLDivElement>(null);
   
+  // Calculate positioning
+  const spaceBelow = window.innerHeight - anchorRect.bottom;
+  const spaceAbove = anchorRect.top;
+  // Prefer below unless there's significantly more space above or below is too small
+  const showUp = spaceBelow < 300 && spaceAbove > spaceBelow;
+  
+  const maxHeight = showUp ? Math.min(spaceAbove - 20, 500) : Math.min(spaceBelow - 20, 500);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         onClose();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    
+    // Add listener after a brief delay to prevent immediate closing
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 10);
+    
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, [onClose]);
-
-  const spaceBelow = window.innerHeight - anchorRect.bottom;
-  const showUp = spaceBelow < 400; // Estimated height of dropdown
 
   return createPortal(
     <div 
       ref={dropdownRef}
-      className="fixed z-[9999] bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+      className="fixed z-[10000] bg-[#141416]/95 backdrop-blur-xl border border-[#D4AF37]/30 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-200 ring-1 ring-white/10"
       style={{
-        width: '240px',
-        left: `${Math.min(anchorRect.left, window.innerWidth - 250)}px`,
-        top: showUp ? 'auto' : `${anchorRect.bottom + 8}px`,
-        bottom: showUp ? `${window.innerHeight - anchorRect.top + 8}px` : 'auto'
+        width: '260px',
+        left: `${Math.max(10, Math.min(anchorRect.left, window.innerWidth - 270))}px`,
+        top: showUp ? 'auto' : `${anchorRect.bottom + 12}px`,
+        bottom: showUp ? `${window.innerHeight - anchorRect.top + 12}px` : 'auto',
+        maxHeight: `${maxHeight}px`,
+        display: 'flex',
+        flexDirection: 'column'
       }}
     >
-      <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
-        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#D4AF37]">Change Status</p>
+      <div className="px-4 py-3 border-b border-white/10 bg-white/[0.03] flex items-center justify-between shrink-0">
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#D4AF37]">Select Progress Status</p>
+        <div className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] animate-pulse" />
       </div>
-      {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
-        <button
-          key={status}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(status);
-          }}
-          className="w-full text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0 flex items-center justify-between group"
-        >
-          <span>{STATUS_CONFIG[status].funnelLabel}</span>
-          <div className={cn(
-            "w-2 h-2 rounded-full border border-white/20",
-            STATUS_CONFIG[status].color.split(' ')[1]
-          )} />
-        </button>
-      ))}
+      <div className="overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 flex-1">
+        {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+          <button
+            key={status}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(status);
+            }}
+            className="w-full text-left px-5 py-4 text-[11px] font-black uppercase tracking-widest text-white/60 hover:text-white hover:bg-[#D4AF37]/10 transition-all border-b border-white/5 last:border-0 flex items-center justify-between group active:scale-[0.98]"
+          >
+            <div className="flex items-center gap-3">
+               <div className={cn(
+                "w-2.5 h-2.5 rounded-full border-2",
+                STATUS_CONFIG[status].color.split(' ')[1].replace('text-', 'border-').split('/')[0]
+              )} />
+              <span>{STATUS_CONFIG[status].funnelLabel}</span>
+            </div>
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+              <CheckCircle2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+            </div>
+          </button>
+        ))}
+      </div>
     </div>,
     document.body
   );

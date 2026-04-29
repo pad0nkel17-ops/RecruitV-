@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { 
   Users, 
@@ -193,6 +194,62 @@ const getBadgeStyles = (val: string) => {
   return "bg-white/5 text-white/90 border-white/10";
 };
 
+const StatusPickerPortal = ({ boosterId, anchorRect, onSelect, onClose }: { 
+  boosterId: string, 
+  anchorRect: DOMRect, 
+  onSelect: (status: string) => void, 
+  onClose: () => void 
+}) => {
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  const spaceBelow = window.innerHeight - anchorRect.bottom;
+  const showUp = spaceBelow < 400; // Estimated height of dropdown
+
+  return createPortal(
+    <div 
+      ref={dropdownRef}
+      className="fixed z-[9999] bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+      style={{
+        width: '240px',
+        left: `${Math.min(anchorRect.left, window.innerWidth - 250)}px`,
+        top: showUp ? 'auto' : `${anchorRect.bottom + 8}px`,
+        bottom: showUp ? `${window.innerHeight - anchorRect.top + 8}px` : 'auto'
+      }}
+    >
+      <div className="px-3 py-2 border-b border-white/5 bg-white/[0.02]">
+        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[#D4AF37]">Change Status</p>
+      </div>
+      {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+        <button
+          key={status}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(status);
+          }}
+          className="w-full text-left px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0 flex items-center justify-between group"
+        >
+          <span>{STATUS_CONFIG[status].funnelLabel}</span>
+          <div className={cn(
+            "w-2 h-2 rounded-full border border-white/20",
+            STATUS_CONFIG[status].color.split(' ')[1]
+          )} />
+        </button>
+      ))}
+    </div>,
+    document.body
+  );
+};
+
 interface DbSummary {
   urgent: number;
   stale: number;
@@ -203,7 +260,7 @@ interface DbSummary {
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [viewingBooster, setViewingBooster] = useState<Booster | null>(null);
-  const [statusPickerBoosterId, setStatusPickerBoosterId] = useState<string | null>(null);
+  const [statusPickerAnchor, setStatusPickerAnchor] = useState<{ id: string, rect: DOMRect } | null>(null);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
   const [selectedForm, setSelectedForm] = useState<string>('');
@@ -252,7 +309,7 @@ export default function App() {
 
   useEffect(() => {
     const handleClickOutside = () => {
-      setStatusPickerBoosterId(null);
+      setStatusPickerAnchor(null);
     };
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
@@ -2479,38 +2536,24 @@ Added to MasterFile`;
                                 </button>
                               </td>
                             )}
-                            <td className="px-3 py-2 border-b border-white/5">
+                            <td 
+                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/status"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                setStatusPickerAnchor({ id: booster.id, rect });
+                              }}
+                            >
                               <div className="flex flex-col gap-1.5 relative">
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setStatusPickerBoosterId(statusPickerBoosterId === booster.id ? null : booster.id);
-                                  }}
-                                  className={cn(
-                                    "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all hover:scale-105 active:scale-95",
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className={cn(
+                                    "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all",
                                     statusConfig?.color
-                                  )}
-                                >
-                                  {statusConfig?.funnelLabel || booster.status}
-                                </button>
-
-                                {statusPickerBoosterId === booster.id && (
-                                  <div className="absolute left-0 top-full mt-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl z-[100] py-1 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                                    {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
-                                      <button
-                                        key={status}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          updateStatus(booster.id, status as any);
-                                          setStatusPickerBoosterId(null);
-                                        }}
-                                        className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
-                                      >
-                                        {STATUS_CONFIG[status].funnelLabel}
-                                      </button>
-                                    ))}
+                                  )}>
+                                    {statusConfig?.funnelLabel || booster.status}
                                   </div>
-                                )}
+                                  <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
+                                </div>
                                 
                                 {booster.statusHistory && booster.statusHistory.length > 0 && (
                                   <span className="text-[10px] text-emerald-400/70 font-mono tracking-tighter">
@@ -2552,13 +2595,19 @@ Added to MasterFile`;
                                 </div>
                               </div>
                             </td>
-                            <td className="px-3 py-2 border-b border-white/5">
+                            <td 
+                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/region"
+                              onClick={() => setEditingCell({ id: booster.id, field: 'region', value: booster.region || '' })}
+                            >
                               <div className="flex flex-col gap-0.5">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center justify-between gap-1.5">
+                                   <div className="flex items-center gap-1.5">
                                      <Globe className="w-2 h-2 text-[#D4AF37]/70" />
                                      <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
-                                  </div>
-                                  <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
+                                   </div>
+                                   <Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37] transition-all" />
+                                </div>
+                                <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
                                </div>
                             </td>
                             {dynamicColumns.map(col => {
@@ -2567,8 +2616,15 @@ Added to MasterFile`;
                                          (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
                               
                               return (
-                                <td key={col} className="px-3 py-2 border-b border-white/5">
-                                  <CellContent val={val} col={col} />
+                                <td 
+                                  key={col} 
+                                  className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/dynamic"
+                                  onClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <CellContent val={val} col={col} />
+                                    <Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] transition-all shrink-0" />
+                                  </div>
                                 </td>
                               );
                             })}
@@ -3032,6 +3088,18 @@ Added to MasterFile`;
             </div>
           )}
         </AnimatePresence>
+
+        {statusPickerAnchor && (
+          <StatusPickerPortal 
+            boosterId={statusPickerAnchor.id} 
+            anchorRect={statusPickerAnchor.rect} 
+            onClose={() => setStatusPickerAnchor(null)} 
+            onSelect={(newStatus) => {
+              updateStatus(statusPickerAnchor.id, newStatus as any);
+              setStatusPickerAnchor(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

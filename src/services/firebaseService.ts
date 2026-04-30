@@ -35,6 +35,7 @@ export interface BoosterData {
   workingHours?: string;
   region?: string;
   fieldOverrides?: Record<string, any>;
+  lastStatusCheckedAt?: string;
   updatedAt: string;
   fields?: Record<string, any>;
 }
@@ -102,6 +103,13 @@ export const firebaseService = {
     await setDoc(doc(db, BOOSTER_DATA_COL, data.id), data);
   },
 
+  async markStatusChecked(id: string) {
+    const ref = doc(db, BOOSTER_DATA_COL, id);
+    await updateDoc(ref, { 
+      lastStatusCheckedAt: new Date().toISOString() 
+    });
+  },
+
   async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string, crmAccount?: string) {
     const ref = doc(db, BOOSTER_DATA_COL, id);
     const snap = await getDoc(ref);
@@ -134,7 +142,9 @@ export const firebaseService = {
 
       const updates: any = { 
         updatedAt: now,
-        statusHistory: shouldAddNewHistory ? [...history, historyEntry] : history
+        statusHistory: shouldAddNewHistory ? [...history, historyEntry] : history,
+        // Reset check time if status changes
+        ...(shouldAddNewHistory && status ? { lastStatusCheckedAt: null } : {})
       };
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;

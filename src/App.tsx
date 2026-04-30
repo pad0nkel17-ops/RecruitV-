@@ -72,6 +72,7 @@ interface Booster {
   status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE' | 'REJECTED' | 'DUPLICATION';
   statusUpdatedAt: string;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
+  lastStatusCheckedAt?: string;
   crmAccount?: string;
   contactStartedOn: 'TELEGRAM' | 'DISCORD' | null;
   notes: string;
@@ -271,6 +272,160 @@ const StatusPickerPortal = ({ boosterId, anchorRect, onSelect, onClose }: {
       </div>
     </div>,
     document.body
+  );
+};
+
+const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkChecked: (id: string) => void }) => {
+  if (!booster.statusHistory || booster.statusHistory.length === 0) return null;
+  
+  if (booster.status !== 'RECRUITMENT IN PROCESS' && booster.status !== 'CRM ACCOUNT GIVEN') {
+    return (
+      <span className="text-[10px] text-white/40 font-mono tracking-tighter">
+        {new Date(booster.statusHistory[booster.statusHistory.length - 1].timestamp).toLocaleDateString()}
+      </span>
+    );
+  }
+
+  const lastEntry = booster.statusHistory[booster.statusHistory.length - 1];
+  const lastTimestamp = new Date(lastEntry.timestamp).getTime();
+  const now = new Date().getTime();
+  const diffInMs = now - lastTimestamp;
+  const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+  const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+
+  let colorClass = "text-emerald-400";
+  let showWarning = false;
+  let label = "";
+
+  if (diffInHours < 24) {
+    colorClass = "text-emerald-400";
+    label = `${diffInHours}h passed`;
+  } else if (diffInDays <= 3) {
+    colorClass = "text-yellow-400";
+    label = `${diffInDays} days passed`;
+    showWarning = true;
+  } else {
+    colorClass = "text-rose-500";
+    label = `${diffInDays} days passed`;
+    showWarning = true;
+  }
+
+  // Check for second warning
+  let secondWarning = false;
+  let canCheck = true;
+
+  if (booster.lastStatusCheckedAt) {
+    const checkedAt = new Date(booster.lastStatusCheckedAt).getTime();
+    const checkedDiffInMs = now - checkedAt;
+    const checkedDiffInHours = Math.floor(checkedDiffInMs / (1000 * 60 * 60));
+    
+    if (checkedDiffInHours >= 24) {
+      secondWarning = true;
+      // User said: "If 1 day passed after we market what status checked, and its not been moved, reset status of button"
+      canCheck = true; 
+    } else {
+      canCheck = false;
+    }
+  }
+
+  const getIdentity = () => {
+    if (booster.contactStartedOn === 'TELEGRAM' && booster.telegram) return `TG: ${booster.telegram}`;
+    if (booster.contactStartedOn === 'DISCORD' && booster.discord) return `DS: ${booster.discord}`;
+    
+    // Fallbacks
+    if (booster.telegram) return `TG: ${booster.telegram}`;
+    if (booster.discord) return `DS: ${booster.discord}`;
+    const fullName = (booster.fields as any)?.['Full name'];
+    if (fullName) return `Name: ${fullName}`;
+    const dsUser = (booster.fields as any)?.['Discord Username'];
+    if (dsUser) return `DS: ${dsUser}`;
+    return 'Identity: Unknown';
+  };
+
+  const identity = getIdentity();
+
+  const copyIdentityHandle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rawHandle = booster.contactStartedOn === 'TELEGRAM' ? booster.telegram : 
+                      booster.contactStartedOn === 'DISCORD' ? booster.discord : 
+                      (booster.telegram || booster.discord);
+    
+    if (rawHandle) {
+      const handle = rawHandle.replace(/^@/, '');
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(handle).catch(err => {
+          const textArea = document.createElement("textarea");
+          textArea.value = handle;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textArea);
+        });
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = handle;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+    }
+  };
+
+  const handleCopyAndMark = (e: React.MouseEvent) => {
+    copyIdentityHandle(e);
+    onMarkChecked(booster.id);
+  };
+
+  return (
+    <div className="flex flex-col gap-1 mt-1">
+      <div className="flex items-center gap-2">
+        <span className={cn("text-[10px] font-mono tracking-tighter font-bold", colorClass)}>
+          {label}
+        </span>
+        {showWarning && canCheck && (
+          <button
+            onClick={handleCopyAndMark}
+            className="px-2 py-0.5 bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 border border-[#D4AF37]/30 rounded text-[9px] font-black uppercase tracking-widest text-[#D4AF37] transition-all whitespace-nowrap flex items-center gap-1 shadow-[0_0_15px_rgba(212,175,55,0.1)] active:scale-95"
+          >
+            <Copy className="w-2.5 h-2.5" />
+            Confirm Status Checked
+          </button>
+        )}
+      </div>
+      
+      {booster.lastStatusCheckedAt && !secondWarning && (
+        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded w-fit">
+          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-400/80">
+            Contacted again: {new Date(booster.lastStatusCheckedAt).toLocaleDateString()}
+          </span>
+        </div>
+      )}
+
+      {showWarning && (
+        <div className="flex flex-col gap-0.5 bg-white/[0.03] p-1.5 rounded-lg border border-white/5 max-w-[180px]">
+          <div className="flex items-center gap-1.5 px-0.5">
+            <AlertCircle className={cn("w-3 h-3", secondWarning ? "text-rose-500 animate-pulse" : "text-yellow-400")} />
+            <span className={cn("text-[8px] font-black uppercase tracking-widest", secondWarning ? "text-rose-400" : "text-white/60")}>
+              {secondWarning ? "Second warning" : "Check status"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-1 pl-0.5">
+            <span className="text-[10px] text-white/40 truncate italic flex-1">
+              {identity}
+            </span>
+            <button 
+              onClick={copyIdentityHandle}
+              className="p-1 hover:bg-white/10 rounded transition-colors group/copy"
+              title="Copy contact"
+            >
+              <Copy className="w-2.5 h-2.5 text-white/20 group-hover/copy:text-[#D4AF37]" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -1096,11 +1251,25 @@ export default function App() {
           status, 
           crmAccount: crmAccount || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
-          statusHistory: [...(b.statusHistory || []), historyEntry]
+          statusHistory: [...(b.statusHistory || []), historyEntry],
+          lastStatusCheckedAt: undefined
         };
       }));
     } catch (err) {
       console.error('Failed to update status:', err);
+    }
+  };
+
+  const onMarkChecked = async (id: string) => {
+    try {
+      await firebaseService.markStatusChecked(id);
+      setBoosters(prev => prev.map(b => {
+        if (String(b.id) !== String(id)) return b;
+        return { ...b, lastStatusCheckedAt: new Date().toISOString() };
+      }));
+      setNotification({ message: 'Status check confirmed', type: 'SUCCESS' });
+    } catch (err) {
+      console.error('Failed to mark status checked:', err);
     }
   };
 
@@ -1141,7 +1310,8 @@ export default function App() {
           status,
           crmAccount: crmAccount || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
-          statusHistory: [...(b.statusHistory || []), historyEntry]
+          statusHistory: [...(b.statusHistory || []), historyEntry],
+          lastStatusCheckedAt: undefined
         };
       }));
       setSelectedBoosterIds(new Set());
@@ -2579,11 +2749,7 @@ Added to MasterFile`;
                                   <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
                                 </div>
                                 
-                                {booster.statusHistory && booster.statusHistory.length > 0 && (
-                                  <span className="text-[10px] text-emerald-400/70 font-mono tracking-tighter">
-                                    {new Date(booster.statusHistory[booster.statusHistory.length - 1].timestamp).toLocaleDateString()}
-                                  </span>
-                                )}
+                                <StatusProgress booster={booster} onMarkChecked={onMarkChecked} />
                               </div>
                             </td>
                             <td className="px-3 py-2 border-b border-white/5">

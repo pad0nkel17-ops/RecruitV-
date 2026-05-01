@@ -106,9 +106,26 @@ export const firebaseService = {
 
   async markStatusChecked(id: string) {
     const ref = doc(db, BOOSTER_DATA_COL, id);
-    await updateDoc(ref, { 
-      lastStatusCheckedAt: new Date().toISOString() 
-    });
+    const snap = await getDoc(ref);
+    const now = new Date().toISOString();
+    
+    const historyEntry = {
+      status: 'CHECKED',
+      timestamp: now,
+    };
+
+    if (snap.exists()) {
+      const currentData = snap.data() as BoosterData;
+      const history = currentData.statusHistory || [];
+      await updateDoc(ref, { 
+        lastStatusCheckedAt: now,
+        statusHistory: [...history, historyEntry]
+      });
+    } else {
+      await updateDoc(ref, { 
+        lastStatusCheckedAt: now 
+      });
+    }
   },
 
   async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string, crmAccount?: string) {

@@ -276,6 +276,7 @@ const StatusPickerPortal = ({ boosterId, anchorRect, onSelect, onClose }: {
 };
 
 const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkChecked: (id: string) => void }) => {
+  const [justCopied, setJustCopied] = useState(false);
   if (!booster.statusHistory || booster.statusHistory.length === 0) return null;
   
   if (booster.status !== 'RECRUITMENT IN PROCESS' && booster.status !== 'CRM ACCOUNT GIVEN') {
@@ -352,23 +353,36 @@ const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkCh
     
     if (rawHandle) {
       const handle = rawHandle.replace(/^@/, '');
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(handle).catch(err => {
+      
+      const doCopy = (text: string) => {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(text).then(() => {
+            setJustCopied(true);
+            setTimeout(() => setJustCopied(false), 2000);
+          }).catch(() => {
+            // fallback
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand("copy");
+            document.body.removeChild(textArea);
+            setJustCopied(true);
+            setTimeout(() => setJustCopied(false), 2000);
+          });
+        } else {
           const textArea = document.createElement("textarea");
-          textArea.value = handle;
+          textArea.value = text;
           document.body.appendChild(textArea);
           textArea.select();
           document.execCommand("copy");
           document.body.removeChild(textArea);
-        });
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = handle;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-      }
+          setJustCopied(true);
+          setTimeout(() => setJustCopied(false), 2000);
+        }
+      };
+
+      doCopy(handle);
     }
   };
 
@@ -395,16 +409,16 @@ const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkCh
       </div>
       
       {booster.lastStatusCheckedAt && !secondWarning && (
-        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded w-fit">
-          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-400/80">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/40 rounded-full w-fit shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+          <span className="text-[10px] font-black uppercase tracking-[0.05em] text-emerald-400">
             Contacted again: {new Date(booster.lastStatusCheckedAt).toLocaleDateString()}
           </span>
         </div>
       )}
 
       {showWarning && (
-        <div className="flex flex-col gap-0.5 bg-white/[0.03] p-1.5 rounded-lg border border-white/5 max-w-[180px]">
+        <div className="flex flex-col gap-0.5 bg-white/[0.03] p-1.5 rounded-lg border border-white/5 max-w-[180px] shadow-xl">
           <div className="flex items-center gap-1.5 px-0.5">
             <AlertCircle className={cn("w-3 h-3", secondWarning ? "text-rose-500 animate-pulse" : "text-yellow-400")} />
             <span className={cn("text-[8px] font-black uppercase tracking-widest", secondWarning ? "text-rose-400" : "text-white/60")}>
@@ -412,15 +426,31 @@ const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkCh
             </span>
           </div>
           <div className="flex items-center justify-between gap-1 pl-0.5">
-            <span className="text-[10px] text-white/40 truncate italic flex-1">
-              {identity}
-            </span>
             <button 
               onClick={copyIdentityHandle}
-              className="p-1 hover:bg-white/10 rounded transition-colors group/copy"
+              className="text-[10px] text-white/60 truncate italic flex-1 hover:text-white transition-colors text-left"
+            >
+              {identity}
+            </button>
+            <button 
+              onClick={copyIdentityHandle}
+              className="p-1 hover:bg-white/10 rounded transition-colors group/copy relative"
               title="Copy contact"
             >
-              <Copy className="w-2.5 h-2.5 text-white/20 group-hover/copy:text-[#D4AF37]" />
+              {justCopied ? (
+                <Check className="w-2.5 h-2.5 text-emerald-400" />
+              ) : (
+                <Copy className="w-2.5 h-2.5 text-white/20 group-hover/copy:text-[#D4AF37]" />
+              )}
+              {justCopied && (
+                <motion.span 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: -20 }}
+                  className="absolute left-1/2 -translate-x-1/2 text-[8px] font-bold text-emerald-400 bg-emerald-400/10 px-1 py-0.5 rounded border border-emerald-400/20 whitespace-nowrap"
+                >
+                  COPIED!
+                </motion.span>
+              )}
             </button>
           </div>
         </div>
@@ -904,9 +934,24 @@ export default function App() {
       });
     });
 
-    return Object.entries(counts)
+    const cols = Object.entries(counts)
       .sort((a, b) => b[1] - a[1]) // Core fields and then most filled
       .map(entry => entry[0]);
+
+    if (activeTab === 'WAITING FOR RECRUITMENT') {
+      const groupCol = cols.find(c => c.toLowerCase().includes('group of players') || c.toLowerCase().includes('applying for yourself'));
+      const primaryCol = cols.find(c => c === 'Primary Contact');
+      if (groupCol && primaryCol) {
+        const groupIdx = cols.indexOf(groupCol);
+        const primaryIdx = cols.indexOf(primaryCol);
+        // Swap them if they are both found
+        const temp = cols[groupIdx];
+        cols[groupIdx] = cols[primaryIdx];
+        cols[primaryIdx] = temp;
+      }
+    }
+
+    return cols;
   }, [boosters, fieldSettings, selectedForm, activeTab]);
 
   const currentForm = useMemo(() => forms.find(f => f.id === selectedForm), [forms, selectedForm]);
@@ -1281,9 +1326,14 @@ export default function App() {
   const onMarkChecked = async (id: string) => {
     try {
       await firebaseService.markStatusChecked(id);
+      const now = new Date().toISOString();
       setBoosters(prev => prev.map(b => {
         if (String(b.id) !== String(id)) return b;
-        return { ...b, lastStatusCheckedAt: new Date().toISOString() };
+        return { 
+          ...b, 
+          lastStatusCheckedAt: now,
+          statusHistory: [...(b.statusHistory || []), { status: 'CHECKED', timestamp: now }]
+        };
       }));
       setNotification({ message: 'Status check confirmed', type: 'SUCCESS' });
     } catch (err) {

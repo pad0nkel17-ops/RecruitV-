@@ -36,6 +36,7 @@ export interface BoosterData {
   region?: string;
   fieldOverrides?: Record<string, any>;
   lastStatusCheckedAt?: string;
+  statusUpdatedAt?: string;
   updatedAt: string;
   fields?: Record<string, any>;
 }
@@ -115,11 +116,14 @@ export const firebaseService = {
     const snap = await getDoc(ref);
     const now = new Date().toISOString();
     
+    // Trim CRM account if provided
+    const trimmedCrm = crmAccount?.trim();
+    
     const historyEntry: any = {
       status: status || 'WAITING FOR RECRUITMENT',
       timestamp: now,
     };
-    if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
+    if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
 
     if (!snap.exists()) {
       const newDoc: any = {
@@ -128,10 +132,11 @@ export const firebaseService = {
         status: status || 'WAITING FOR RECRUITMENT',
         notes: notes || '',
         updatedAt: now,
+        statusUpdatedAt: now,
         contactStartedOn: null,
         statusHistory: [historyEntry],
       };
-      if (crmAccount !== undefined) newDoc.crmAccount = crmAccount;
+      if (trimmedCrm !== undefined) newDoc.crmAccount = trimmedCrm;
       await setDoc(ref, newDoc);
     } else {
       const currentData = snap.data() as BoosterData;
@@ -142,13 +147,14 @@ export const firebaseService = {
 
       const updates: any = { 
         updatedAt: now,
+        statusUpdatedAt: now,
         statusHistory: shouldAddNewHistory ? [...history, historyEntry] : history,
         // Reset check time if status changes
         ...(shouldAddNewHistory && status ? { lastStatusCheckedAt: null } : {})
       };
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;
-      if (crmAccount !== undefined) updates.crmAccount = crmAccount;
+      if (trimmedCrm !== undefined) updates.crmAccount = trimmedCrm;
       
       await updateDoc(ref, updates);
     }

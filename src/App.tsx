@@ -541,16 +541,32 @@ export default function App() {
       setConfigStatus(activeTab);
     }
   }, [settingsOpen, activeTab]);
+  const getGMT3DateString = (date?: Date) => {
+    const d = date || new Date();
+    // Using Europe/Istanbul as it is UTC+3 and does not observe DST changes
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Istanbul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  };
+
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
+    const currentDay = getGMT3DateString();
+    const savedStart = localStorage.getItem('booster_filter_start_date');
+    
+    if (savedStart) {
+      return { start: savedStart, end: currentDay };
+    }
+
     const now = new Date();
-    // Start of last month
+    // Start of last month as a sensible default if none saved
     const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    // Last day of current month
-    const endOfCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     
     return {
       start: startOfPrevMonth.toISOString().split('T')[0],
-      end: endOfCurrentMonth.toISOString().split('T')[0]
+      end: currentDay
     };
   });
 
@@ -819,18 +835,19 @@ export default function App() {
       const existing = bData.find(d => String(d.id) === sId);
       const now = new Date().toISOString();
       
-      const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: value };
+      const trimmedValue = field === 'crmAccount' ? value.trim() : value;
+      const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: trimmedValue };
       const isCoreField = ['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
       
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
-         await firebaseService.updateBoosterStatus(sId, selectedForm, value);
+         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue);
       } else {
         const newEntry: BoosterData = existing ? {
           ...existing,
           fieldOverrides: updatedOverrides,
           updatedAt: now,
-          ...(isCoreField ? { [field]: value } : {})
+          ...(isCoreField ? { [field]: trimmedValue } : {})
         } : {
           id: sId,
           formId: selectedForm,
@@ -839,7 +856,7 @@ export default function App() {
           contactStartedOn: null,
           fieldOverrides: updatedOverrides,
           updatedAt: now,
-          ...(isCoreField ? { [field]: value } : {})
+          ...(isCoreField ? { [field]: trimmedValue } : {})
         };
 
         await firebaseService.saveBoosterData(newEntry);
@@ -848,12 +865,12 @@ export default function App() {
       setBoosters(prev => prev.map(b => {
         if (String(b.id) !== sId) return b;
         if (field.toLowerCase() === 'status') {
-          return { ...b, status: value as any };
+          return { ...b, status: trimmedValue as any };
         }
         if (['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field)) {
-          return { ...b, [field]: value };
+          return { ...b, [field]: trimmedValue };
         }
-        return { ...b, fields: { ...b.fields, [field]: value } };
+        return { ...b, fields: { ...b.fields, [field]: trimmedValue } };
       }));
       setEditingCell(null);
     } catch (err) {
@@ -1011,7 +1028,7 @@ export default function App() {
             workingHours: d.workingHours || getFVal(['hours', 'time']),
             region: d.region || getFVal(['region', 'country']),
             status: d.status as any,
-            statusUpdatedAt: d.updatedAt,
+            statusUpdatedAt: d.statusUpdatedAt || d.updatedAt,
             statusHistory: d.statusHistory || [],
             crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
             contactStartedOn: d.contactStartedOn as any,
@@ -1059,7 +1076,7 @@ export default function App() {
             workingHours: getVal('How long') || getVal('Working hours'),
             region: getVal('region'),
             status: (persist?.status || 'WAITING FOR RECRUITMENT') as any,
-            statusUpdatedAt: persist?.updatedAt || sub.created_at,
+            statusUpdatedAt: persist?.statusUpdatedAt || persist?.updatedAt || sub.created_at,
             statusHistory: persist?.statusHistory || [],
             crmAccount: persist?.crmAccount || persist?.fieldOverrides?.['crmAccount'] || '',
             contactStartedOn: (persist?.contactStartedOn || null) as any,
@@ -1070,7 +1087,7 @@ export default function App() {
         });
       }
 
-      merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      merged.sort((a, b) => new Date(b.statusUpdatedAt || b.createdAt).getTime() - new Date(a.statusUpdatedAt || a.createdAt).getTime());
       setBoosters(merged);
       setError(null);
       
@@ -1244,12 +1261,13 @@ export default function App() {
         if (String(b.id) !== sId) return b;
         
         const historyEntry: any = { status, timestamp: new Date().toISOString() };
-        if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
+        const trimmedCrm = crmAccount?.trim();
+        if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
 
         return { 
           ...b, 
           status, 
-          crmAccount: crmAccount || b.crmAccount,
+          crmAccount: trimmedCrm || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
           statusHistory: [...(b.statusHistory || []), historyEntry],
           lastStatusCheckedAt: undefined
@@ -1303,12 +1321,13 @@ export default function App() {
         if (!sIds.includes(String(b.id))) return b;
 
         const historyEntry: any = { status, timestamp: new Date().toISOString() };
-        if (crmAccount !== undefined) historyEntry.crmAccount = crmAccount;
+        const trimmedCrm = crmAccount?.trim();
+        if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
 
         return {
           ...b,
           status,
-          crmAccount: crmAccount || b.crmAccount,
+          crmAccount: trimmedCrm || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
           statusHistory: [...(b.statusHistory || []), historyEntry],
           lastStatusCheckedAt: undefined
@@ -1493,18 +1512,22 @@ Added to MasterFile`;
       if (dateRange.start || dateRange.end) {
         const rowDate = new Date(b.createdAt);
         if (dateRange.start) {
-          const start = new Date(dateRange.start);
-          start.setHours(0, 0, 0, 0);
+          // Interpret start as midnight in GMT+3
+          const start = new Date(`${dateRange.start}T00:00:00+03:00`);
           if (rowDate < start) matchesDate = false;
         }
         if (dateRange.end) {
-          const end = new Date(dateRange.end);
-          end.setHours(23, 59, 59, 999);
+          // Interpret end as end of day in GMT+3
+          const end = new Date(`${dateRange.end}T23:59:59+03:00`);
           if (rowDate > end) matchesDate = false;
         }
       }
       
       return matchesSearch && matchesGameFilter && matchesTab && matchesDate;
+    }).sort((a, b) => {
+      const timeA = new Date(a.statusUpdatedAt || a.createdAt).getTime();
+      const timeB = new Date(b.statusUpdatedAt || b.createdAt).getTime();
+      return timeB - timeA;
     });
   }, [boosters, search, gameFilter, activeTab, dateRange]);
 
@@ -1928,7 +1951,11 @@ Added to MasterFile`;
                 <input 
                   type="date" 
                   value={dateRange.start}
-                  onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setDateRange(prev => ({ ...prev, start: val }));
+                    if (val) localStorage.setItem('booster_filter_start_date', val);
+                  }}
                   className="bg-transparent text-[12px] text-white outline-none [color-scheme:dark] w-auto border-none focus:ring-0 cursor-pointer"
                 />
                 <span className="text-white/40 text-[12px] select-none">—</span>
@@ -1940,7 +1967,10 @@ Added to MasterFile`;
                 />
                 {(dateRange.start || dateRange.end) && (
                   <button 
-                    onClick={() => setDateRange({ start: '', end: '' })}
+                    onClick={() => {
+                      const currentDay = getGMT3DateString();
+                      setDateRange({ start: '', end: currentDay });
+                    }}
                     className="ml-1 sm:ml-2 hover:text-rose-400 transition-colors"
                   >
                     <FilterX className="w-3 h-3" />
@@ -3025,9 +3055,9 @@ Added to MasterFile`;
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && tempCrmName.trim()) {
                           if (crmPrompt.ids.length === 1) {
-                            updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName);
+                            updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName.trim());
                           } else {
-                            bulkUpdateStatus(crmPrompt.status, tempCrmName);
+                            bulkUpdateStatus(crmPrompt.status, tempCrmName.trim());
                           }
                           setCrmPrompt(null);
                         }
@@ -3046,9 +3076,9 @@ Added to MasterFile`;
                       disabled={!tempCrmName.trim()}
                       onClick={() => {
                         if (crmPrompt.ids.length === 1) {
-                          updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName);
+                          updateStatus(crmPrompt.ids[0], crmPrompt.status, tempCrmName.trim());
                         } else {
-                          bulkUpdateStatus(crmPrompt.status, tempCrmName);
+                          bulkUpdateStatus(crmPrompt.status, tempCrmName.trim());
                         }
                         setCrmPrompt(null);
                       }}

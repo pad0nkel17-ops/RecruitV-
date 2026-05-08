@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { 
@@ -63,7 +63,6 @@ function cn(...inputs: ClassValue[]) {
 
 interface Booster {
   id: string;
-  createdAt: string;
   telegram: string;
   discord: string;
   games: string;
@@ -71,6 +70,9 @@ interface Booster {
   region: string;
   status: 'WAITING FOR RECRUITMENT' | 'RECRUITMENT IN PROCESS' | 'CRM ACCOUNT GIVEN' | 'RECRUITED' | 'LOST' | 'RESERVE' | 'REJECTED' | 'DUPLICATION';
   statusUpdatedAt: string;
+  statusSortTime: number;
+  createdAt: string;
+  createdSortTime: number;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   lastStatusCheckedAt?: string;
   crmAccount?: string;
@@ -79,6 +81,8 @@ interface Booster {
   formId: string;
   fields: Record<string, string>;
   formTitle?: string;
+  fastSearchContent?: string;
+  deepSearchContent?: string;
 }
 
 const CellContent = ({ val, col }: { val: any, col: string }) => {
@@ -116,6 +120,71 @@ const CellContent = ({ val, col }: { val: any, col: string }) => {
           {expanded ? 'Show Less' : `+${parts.length - 10} more`}
         </button>
       )}
+    </div>
+  );
+};
+
+const computeFastSearchContent = (b: any): string => {
+  const parts = [
+    String(b.id || ''),
+    String(b.telegram || ''),
+    String(b.discord || ''),
+    String(b.crmAccount || ''),
+  ];
+  return parts.join(' ').toLowerCase();
+};
+
+const computeDeepSearchContent = (b: any): string => {
+  const parts = [
+    String(b.games || ''),
+    String(b.notes || ''),
+    String(b.region || ''),
+    String(b.createdAt || ''),
+    String(b.workingHours || ''),
+    ...Object.values(b.fields || {})
+  ];
+  return parts.join(' ').toLowerCase();
+};
+
+const enhanceBooster = (b: any): Booster => {
+  const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt;
+  const statusSortTime = new Date(statusUpdatedAt).getTime() || 0;
+  const createdSortTime = new Date(b.createdAt).getTime() || 0;
+
+  return {
+    ...b,
+    statusUpdatedAt,
+    statusSortTime,
+    createdSortTime,
+    fastSearchContent: computeFastSearchContent(b),
+    deepSearchContent: computeDeepSearchContent(b)
+  };
+};
+
+const SearchInput = ({ value, onChange }: { value: string, onChange: (val: string) => void }) => {
+  const [localValue, setLocalValue] = useState(value);
+  
+  useEffect(() => {
+    setLocalValue(value);
+  }, [value]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onChange(localValue);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [localValue, onChange]);
+
+  return (
+    <div className="relative group flex-shrink-0">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/50" />
+      <input 
+        type="text" 
+        placeholder="Search..." 
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        className="bg-transparent border-b border-[#2D2D30] focus:border-[#D4AF37] pl-9 pr-4 py-1.5 sm:py-2 text-xs text-white focus:outline-none transition-all w-32 sm:w-48 placeholder:text-white/30"
+      />
     </div>
   );
 };
@@ -480,6 +549,9 @@ export default function App() {
   const [editingFormTitle, setEditingFormTitle] = useState('');
   const [dbSummaries, setDbSummaries] = useState<Record<string, DbSummary>>({});
   const [search, setSearch] = useState('');
+  const [deepSearch, setDeepSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const deferredDeepSearch = useDeferredValue(deepSearch);
   const [gameFilter, setGameFilter] = useState('');
   const [firebaseStatus, setFirebaseStatus] = useState<'CONNECTING' | 'ONLINE' | 'OFFLINE'>('CONNECTING');
   const [activeTab, setActiveTab] = useState<string>('WAITING FOR RECRUITMENT');
@@ -501,7 +573,7 @@ export default function App() {
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
     const saved = localStorage.getItem('pageSize');
-    return saved ? parseInt(saved, 10) : 0; // 0 for ALL
+    return saved ? parseInt(saved, 10) : 50; 
   });
   const [selectedBoosterIds, setSelectedBoosterIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -581,6 +653,19 @@ export default function App() {
       day: '2-digit',
     }).format(d);
   };
+
+  const poolStats = useMemo(() => {
+    let urgent = 0;
+    let stale = 0;
+    let fresh = 0;
+    boosters.forEach(b => {
+      const level = getNotificationLevel(b);
+      if (level === 'URGENT') urgent++;
+      else if (level === 'STALE') stale++;
+      else if (level === 'NEW') fresh++;
+    });
+    return { urgent, stale, fresh };
+  }, [boosters]);
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
     const currentDay = getGMT3DateString();
@@ -894,13 +979,15 @@ export default function App() {
 
       setBoosters(prev => prev.map(b => {
         if (String(b.id) !== sId) return b;
+        let updated: any;
         if (field.toLowerCase() === 'status') {
-          return { ...b, status: trimmedValue as any };
+          updated = { ...b, status: trimmedValue as any };
+        } else if (['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field)) {
+          updated = { ...b, [field]: trimmedValue };
+        } else {
+          updated = { ...b, fields: { ...b.fields, [field]: trimmedValue } };
         }
-        if (['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field)) {
-          return { ...b, [field]: trimmedValue };
-        }
-        return { ...b, fields: { ...b.fields, [field]: trimmedValue } };
+        return enhanceBooster(updated);
       }));
       setEditingCell(null);
     } catch (err) {
@@ -1064,9 +1151,9 @@ export default function App() {
             return foundKey ? fields[foundKey] : '';
           };
 
-          return {
+          return enhanceBooster({
             id: String(d.id),
-            createdAt: d.updatedAt,
+            createdAt: (d as any).createdAt || d.updatedAt,
             telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
             discord: d.discord || getFVal(['discord', 'ds']),
             games: d.games || getFVal(['games', 'game']),
@@ -1079,8 +1166,8 @@ export default function App() {
             contactStartedOn: d.contactStartedOn as any,
             notes: d.notes,
             formId: d.formId,
-            fields: fields
-          };
+            fields: fields,
+          });
         });
       } else {
         // Merge Jotform with Firebase
@@ -1112,7 +1199,7 @@ export default function App() {
               return entry ? formatAnswer(entry.answer) : '';
           };
 
-          return {
+          return enhanceBooster({
             id: sId,
             createdAt: sub.created_at,
             telegram: getVal('Telegram') || getVal('Contact'),
@@ -1127,12 +1214,12 @@ export default function App() {
             contactStartedOn: (persist?.contactStartedOn || null) as any,
             notes: persist?.notes || '',
             formId: idToFetch,
-            fields: dynamicFields
-          };
+            fields: dynamicFields,
+          });
         });
       }
 
-      merged.sort((a, b) => new Date(b.statusUpdatedAt || b.createdAt).getTime() - new Date(a.statusUpdatedAt || a.createdAt).getTime());
+      merged.sort((a, b) => b.statusSortTime - a.statusSortTime);
       setBoosters(merged);
       setError(null);
       
@@ -1309,14 +1396,14 @@ export default function App() {
         const trimmedCrm = crmAccount?.trim();
         if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
 
-        return { 
+        return enhanceBooster({ 
           ...b, 
           status, 
           crmAccount: trimmedCrm || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
           statusHistory: [...(b.statusHistory || []), historyEntry],
           lastStatusCheckedAt: undefined
-        };
+        });
       }));
     } catch (err) {
       console.error('Failed to update status:', err);
@@ -1329,11 +1416,11 @@ export default function App() {
       const now = new Date().toISOString();
       setBoosters(prev => prev.map(b => {
         if (String(b.id) !== String(id)) return b;
-        return { 
+        return enhanceBooster({ 
           ...b, 
           lastStatusCheckedAt: now,
           statusHistory: [...(b.statusHistory || []), { status: 'CHECKED', timestamp: now }]
-        };
+        });
       }));
       setNotification({ message: 'Status check confirmed', type: 'SUCCESS' });
     } catch (err) {
@@ -1374,14 +1461,14 @@ export default function App() {
         const trimmedCrm = crmAccount?.trim();
         if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
 
-        return {
+        return enhanceBooster({
           ...b,
           status,
           crmAccount: trimmedCrm || b.crmAccount,
           statusUpdatedAt: new Date().toISOString(),
           statusHistory: [...(b.statusHistory || []), historyEntry],
           lastStatusCheckedAt: undefined
-        };
+        });
       }));
       setSelectedBoosterIds(new Set());
     } catch (err) {
@@ -1515,71 +1602,352 @@ Added to MasterFile`;
     copyToClipboard(text, `master-${booster.id}`);
   };
 
+  const renderRowCells = (booster: Booster, level: string | null, statusConfig: any) => {
+    return (
+      <>
+        <td className="px-3 py-2 border-b border-white/5">
+          <div className="flex flex-col gap-1.5 min-w-[170px]">
+            {(() => {
+              const rawName = booster.fields?.['Name/Contact'] || '';
+              const tg = booster.telegram || '';
+              const ds = booster.discord || '';
+              const showBigName = rawName && 
+                                  rawName.toLowerCase() !== tg.toLowerCase() && 
+                                  rawName.toLowerCase() !== ds.toLowerCase();
+
+              return (
+                <>
+                  <div className="mb-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
+                    >
+                      <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
+                      View
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
+                      <span className="text-white/20 font-light select-none">:</span>
+                      {level ? (
+                        <div className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
+                          level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
+                        )}>
+                          {level}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
+                      )}
+                      {booster.status === 'DUPLICATION' && (
+                        <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
+                          <Copy className="w-2.5 h-2.5" />
+                          Duplicate
+                        </div>
+                      )}
+                    </div>
+                    
+                    <span className="text-white/20 font-light select-none">:</span>
+                    
+                    <div className="flex flex-wrap gap-1.5">
+                      {tg && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div 
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                              booster.contactStartedOn === 'TELEGRAM' 
+                                ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
+                                : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
+                            )}
+                            onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
+                          >
+                            <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
+                            <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM');
+                            }}
+                            className={cn(
+                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                              booster.contactStartedOn === 'TELEGRAM'
+                                ? "bg-blue-500 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                                : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10"
+                            )}
+                            title="Mark as Contacted via Telegram"
+                          >
+                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'TELEGRAM' ? "stroke-[4]" : "stroke-[2]")} />
+                          </button>
+                        </div>
+                      )}
+                      {ds && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div 
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                              booster.contactStartedOn === 'DISCORD'
+                                ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
+                                : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
+                            )}
+                            onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
+                          >
+                            <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                            <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD');
+                            }}
+                            className={cn(
+                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                              booster.contactStartedOn === 'DISCORD'
+                                ? "bg-indigo-500 border-indigo-400 text-white shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+                                : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/10"
+                            )}
+                            title="Mark as Contacted via Discord"
+                          >
+                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'DISCORD' ? "stroke-[4]" : "stroke-[2]")} />
+                          </button>
+                        </div>
+                      )}
+                      {!tg && !ds && !rawName && (
+                        <span className="text-[12px] text-white/30 italic">No Identity</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {showBigName && (
+                    <div className="pl-5 border-l border-white/10 ml-1.5 -mt-1 group-hover:border-[#D4AF37]/30 transition-colors">
+                      <span className="text-sm font-bold text-white/90 group-hover:text-[#D4AF37] transition-colors truncate block">
+                        {rawName}
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        </td>
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games"
+          onClick={() => setEditingCell({ id: booster.id, field: 'games', value: booster.games || '' })}
+        >
+          <div className="flex items-center justify-between gap-1">
+            <CellContent val={booster.games} col="Games" />
+            <Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37] transition-all" />
+          </div>
+        </td>
+        {activeTab === 'RECRUITED' && (
+          <td className="px-3 py-2 border-b border-white/5">
+            <button
+              onClick={() => copyMasterInfo(booster)}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm border",
+                copiedId === `master-${booster.id}`
+                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
+                  : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/20"
+              )}
+            >
+              {copiedId === `master-${booster.id}` ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy for Master
+                </>
+              )}
+            </button>
+          </td>
+        )}
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/status"
+          onClick={(e) => {
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setStatusPickerAnchor({ id: booster.id, rect });
+          }}
+        >
+          <div className="flex flex-col gap-1.5 relative">
+            <div className="flex items-center justify-between gap-2">
+              <div className={cn(
+                "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all",
+                statusConfig?.color
+              )}>
+                {statusConfig?.funnelLabel || booster.status}
+              </div>
+              <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
+            </div>
+            
+            <StatusProgress booster={booster} onMarkChecked={onMarkChecked} />
+          </div>
+        </td>
+        <td className="px-3 py-2 border-b border-white/5">
+          <div 
+            onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
+            className={cn(
+              "group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
+              booster.crmAccount 
+                ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
+                : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
+            )}
+          >
+            <span className={cn(
+              "text-[12px] uppercase font-bold tracking-wider truncate",
+              !booster.crmAccount && "italic font-normal text-[10px]"
+            )}>
+              {booster.crmAccount || 'Not Assigned'}
+            </span>
+            <div className="flex items-center gap-1.5 ml-2">
+              {booster.crmAccount && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyToClipboard(booster.crmAccount!, `crm-${booster.id}`);
+                  }}
+                  className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                  title="Copy CRM Account"
+                >
+                  <Copy className="w-3 h-3 text-emerald-400" />
+                </button>
+              )}
+              <Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100 transition-opacity" />
+            </div>
+          </div>
+        </td>
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/region"
+          onClick={() => setEditingCell({ id: booster.id, field: 'region', value: booster.region || '' })}
+        >
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <Globe className="w-2 h-2 text-[#D4AF37]/70" />
+                <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
+              </div>
+              <Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37] transition-all" />
+            </div>
+            <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
+          </div>
+        </td>
+        {dynamicColumns.map(col => {
+          const val = col === 'Status' ? booster.status : 
+                      col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() :
+                      (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
+          
+          return (
+            <td 
+              key={col} 
+              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/dynamic"
+              onClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <CellContent val={val} col={col} />
+                <Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] transition-all shrink-0" />
+              </div>
+            </td>
+          );
+        })}
+        <td className="px-3 py-2 border-b border-white/5 text-right">
+          <div className="flex items-center justify-end gap-2">
+            <div className="relative group/status-pick inline-block">
+              <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">
+                <Zap className="w-4 h-4" />
+              </button>
+              <div className="absolute right-0 bottom-full mb-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl opacity-0 translate-y-2 invisible group-hover/status-pick:opacity-100 group-hover/status-pick:visible group-hover/status-pick:translate-y-0 transition-all z-50 py-1 overflow-hidden">
+                {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => updateStatus(booster.id, status as any)}
+                    className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
+                  >
+                    {STATUS_CONFIG[status].funnelLabel}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button 
+              onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes || '' })}
+              className={cn(
+                "p-2.5 rounded-xl transition-all border shrink-0",
+                booster.notes
+                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.1)]"
+                  : "bg-white/5 border-white/10 text-white/20 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30"
+              )}
+              title="Edit Notes"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+          </div>
+        </td>
+      </>
+    );
+  };
+
+
   const filteredBoosters = useMemo(() => {
-    if (!search && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
-      return boosters;
+    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
+      return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
     }
 
-    const searchTerms = search.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+    const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+    const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+
+    // Pre-calculate date filter boundaries if needed
+    let startBoundary = 0;
+    let endBoundary = Infinity;
+    if (dateRange.start) {
+      startBoundary = new Date(`${dateRange.start}T00:00:00+03:00`).getTime();
+    }
+    if (dateRange.end) {
+      endBoundary = new Date(`${dateRange.end}T23:59:59+03:00`).getTime();
+    }
 
     return boosters.filter(b => {
-      // Smart search implementation
-      let matchesSearch = true;
-      if (searchTerms.length > 0) {
-        matchesSearch = searchTerms.every(term => {
-          // Special syntax check
-          if (term.includes(':')) {
-            const [key, val] = term.split(':');
-            if (key === 'status') return b.status.toLowerCase().includes(val);
-            if (key === 'region') return b.region.toLowerCase().includes(val);
-            if (key === 'game' || key === 'games') return b.games.toLowerCase().includes(val);
-            if (key === 'note' || key === 'notes') return b.notes.toLowerCase().includes(val);
-            // Dynamic fields
-            return Object.values(b.fields).some(v => typeof v === 'string' && v.toLowerCase().includes(val));
-          }
-
-          // General search across main fields
-          const inMain = 
-            b.id.toLowerCase().includes(term) ||
-            b.telegram?.toLowerCase().includes(term) ||
-            b.discord?.toLowerCase().includes(term) ||
-            b.games?.toLowerCase().includes(term) ||
-            b.notes?.toLowerCase().includes(term) ||
-            b.region?.toLowerCase().includes(term) ||
-            b.createdAt?.toLowerCase().includes(term);
-          
-          if (inMain) return true;
-
-          // Search in dynamic fields
-          return Object.values(b.fields).some(v => typeof v === 'string' && v.toLowerCase().includes(term));
-        });
-      }
+      // 1. Cheap checks first: Tab and Game Filter
+      if (activeTab !== 'ALL' && b.status !== activeTab) return false;
       
       const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
-      const matchesTab = activeTab === 'ALL' || b.status === activeTab;
-      
-      let matchesDate = true;
-      if (dateRange.start || dateRange.end) {
-        const rowDate = new Date(b.createdAt);
-        if (dateRange.start) {
-          // Interpret start as midnight in GMT+3
-          const start = new Date(`${dateRange.start}T00:00:00+03:00`);
-          if (rowDate < start) matchesDate = false;
-        }
-        if (dateRange.end) {
-          // Interpret end as end of day in GMT+3
-          const end = new Date(`${dateRange.end}T23:59:59+03:00`);
-          if (rowDate > end) matchesDate = false;
-        }
+      if (!matchesGameFilter) return false;
+
+      // 2. Date checks - use pre-calculated timestamps
+      if (startBoundary > 0 || endBoundary < Infinity) {
+        if (b.createdSortTime < startBoundary || b.createdSortTime > endBoundary) return false;
+      }
+
+      // 3. Fast Search (Identity, IDs, Contacts)
+      if (searchTerms.length > 0) {
+        const matches = searchTerms.every(term => {
+          if (term.includes(':')) {
+            const parts = term.split(':');
+            const key = parts[0];
+            const val = parts.slice(1).join(':');
+            if (key === 'status') return b.status.toLowerCase().includes(val);
+            if (key === 'crm') return (b.crmAccount || '').toLowerCase().includes(val);
+            if (key === 'id') return b.id.toLowerCase().includes(val);
+            return b.fastSearchContent?.includes(term);
+          }
+          return b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
+      }
+
+      // 4. Deep Search (Games, Region, Working Hours, Custom Fields)
+      if (deepTerms.length > 0) {
+        const matches = deepTerms.every(term => {
+          return b.deepSearchContent?.includes(term) || b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
       }
       
-      return matchesSearch && matchesGameFilter && matchesTab && matchesDate;
-    }).sort((a, b) => {
-      const timeA = new Date(a.statusUpdatedAt || a.createdAt).getTime();
-      const timeB = new Date(b.statusUpdatedAt || b.createdAt).getTime();
-      return timeB - timeA;
-    });
-  }, [boosters, search, gameFilter, activeTab, dateRange]);
+      return true;
+    }).sort((a, b) => b.statusSortTime - a.statusSortTime);
+  }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange]);
 
   const allGames = useMemo(() => {
     const games = new Set<string>();
@@ -1977,7 +2345,7 @@ Added to MasterFile`;
           </div>
         )}
 
-        <header className="h-14 border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-6 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-md z-30 gap-4 sm:gap-0 py-2 sm:py-0">
+        <header className="min-h-[64px] border-b border-[#2D2D30] flex flex-col sm:flex-row items-center justify-between px-4 sm:px-6 flex-shrink-0 bg-[#0A0A0B]/80 backdrop-blur-md z-30 gap-4 py-2">
           <div className="flex items-center gap-3 text-[13px] text-white/90 w-full sm:w-auto">
             <button 
               onClick={() => setIsSidebarOpen(true)}
@@ -2029,31 +2397,34 @@ Added to MasterFile`;
               </div>
             </div>
 
-            <div className="flex items-center gap-3 shrink-0">
-              {['RESERVE', 'LOST', 'WAITING FOR RECRUITMENT', 'RECRUITMENT IN PROCESS'].includes(activeTab) && (
-                <div className="flex items-center gap-2 border-b border-[#2D2D30] focus-within:border-[#D4AF37] transition-all px-1 pb-1">
-                  <Gamepad2 className="w-3.5 h-3.5 text-white/30" />
-                  <select 
-                    value={gameFilter}
-                    onChange={(e) => setGameFilter(e.target.value)}
-                    className="bg-transparent text-[11px] text-white outline-none focus:outline-none min-w-[80px] cursor-pointer"
-                  >
-                    <option value="" className="bg-[#0A0A0B]">All Games</option>
-                    {allGames.map(g => (
-                      <option key={g} value={g} className="bg-[#0A0A0B]">{g}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+            <div className="flex flex-col items-end gap-2 shrink-0">
+              <div className="flex items-center gap-3">
+                {['RESERVE', 'LOST', 'WAITING FOR RECRUITMENT', 'RECRUITMENT IN PROCESS'].includes(activeTab) && (
+                  <div className="flex items-center gap-2 border-b border-[#2D2D30] focus-within:border-[#D4AF37] transition-all px-1 pb-1">
+                    <Gamepad2 className="w-3.5 h-3.5 text-white/30" />
+                    <select 
+                      value={gameFilter}
+                      onChange={(e) => setGameFilter(e.target.value)}
+                      className="bg-transparent text-[11px] text-white outline-none focus:outline-none min-w-[80px] cursor-pointer"
+                    >
+                      <option value="" className="bg-[#0A0A0B]">All Games</option>
+                      {allGames.map(g => (
+                        <option key={g} value={g} className="bg-[#0A0A0B]">{g}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-              <div className="relative group flex-shrink-0">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/50" />
-                <input 
-                  type="text" 
-                  placeholder="Search..." 
+                <SearchInput 
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="bg-transparent border-b border-[#2D2D30] focus:border-[#D4AF37] pl-9 pr-4 py-1.5 sm:py-2 text-xs text-white focus:outline-none transition-all w-32 sm:w-48 placeholder:text-white/30"
+                  onChange={setSearch}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-white/20 uppercase font-bold tracking-[0.2em]">Full Database Search</span>
+                <SearchInput 
+                  value={deepSearch}
+                  onChange={setDeepSearch}
                 />
               </div>
             </div>
@@ -2462,27 +2833,20 @@ Added to MasterFile`;
                    <Layout className="w-3.5 h-3.5 text-[#D4AF37]" />
                    <span className="text-[12px] font-black text-white/70 uppercase tracking-widest">Pool Status</span>
                  </div>
-                 {(() => {
-                   const urgent = boosters.filter(b => getNotificationLevel(b) === 'URGENT').length;
-                   const stale = boosters.filter(b => getNotificationLevel(b) === 'STALE').length;
-                   const fresh = boosters.filter(b => getNotificationLevel(b) === 'NEW').length;
-                   return (
-                     <div className="flex items-center gap-3">
-                       <div className="flex items-center gap-1.5">
-                         <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] animate-pulse" />
-                         <span className="text-[12px] font-black text-rose-500 font-mono">{urgent} URGENT</span>
-                       </div>
-                       <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
-                         <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_#F59E0B]" />
-                         <span className="text-[10px] font-black text-amber-500 font-mono">{stale} STALE</span>
-                       </div>
-                       <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
-                         <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_#60A5FA]" />
-                         <span className="text-[10px] font-black text-blue-400 font-mono">{fresh} NEW</span>
-                       </div>
-                     </div>
-                   );
-                 })()}
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_8px_#F43F5E] animate-pulse" />
+                      <span className="text-[12px] font-black text-rose-500 font-mono">{poolStats.urgent} URGENT</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
+                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_#F59E0B]" />
+                      <span className="text-[10px] font-black text-amber-500 font-mono">{poolStats.stale} STALE</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 border-l border-white/5 pl-3">
+                      <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_#60A5FA]" />
+                      <span className="text-[10px] font-black text-blue-400 font-mono">{poolStats.fresh} NEW</span>
+                    </div>
+                  </div>
                  <button 
                   onClick={() => scanGlobalDuplicates()}
                   className="flex items-center gap-2 px-4 py-1.5 ml-4 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 text-[#D4AF37] text-[10px] font-black uppercase tracking-widest hover:bg-[#D4AF37]/20 transition-all shadow-sm group/scan"
@@ -2617,21 +2981,20 @@ Added to MasterFile`;
                   </tr>
                 </thead>
                 <tbody>
-                  <AnimatePresence mode="popLayout">
-                    {filteredBoosters
-                      .slice(pageSize === 0 ? 0 : (currentPage - 1) * pageSize, pageSize === 0 ? filteredBoosters.length : currentPage * pageSize)
-                      .map((booster, idx) => {
+                  {(() => {
+                    const rows = filteredBoosters.slice(
+                      pageSize === 0 ? 0 : (currentPage - 1) * pageSize, 
+                      pageSize === 0 ? filteredBoosters.length : currentPage * pageSize
+                    );
+
+                    // Disable animations for performance when viewing all
+                    if (pageSize === 0) {
+                      return rows.map((booster) => {
                         const level = getNotificationLevel(booster);
                         const statusConfig = STATUS_CONFIG[booster.status];
-                        const isLast = idx === (pageSize === 0 ? filteredBoosters.length : Math.min(pageSize, filteredBoosters.length)) - 1;
-
                         return (
-                          <motion.tr
-                            layout
+                          <tr
                             key={booster.id}
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
                             className={cn(
                               "group hover:bg-white/[0.02] transition-colors relative",
                               selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
@@ -2650,290 +3013,48 @@ Added to MasterFile`;
                                 {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
                               </div>
                             </td>
-                            <td className="px-3 py-2 border-b border-white/5">
-                              <div className="flex flex-col gap-1.5 min-w-[170px]">
-                                {(() => {
-                                  const rawName = booster.fields?.['Name/Contact'] || '';
-                                  const tg = booster.telegram || '';
-                                  const ds = booster.discord || '';
-                                  const showBigName = rawName && 
-                                                      rawName.toLowerCase() !== tg.toLowerCase() && 
-                                                      rawName.toLowerCase() !== ds.toLowerCase();
+                            {renderRowCells(booster, level, statusConfig)}
+                          </tr>
+                        );
+                      });
+                    }
 
-                                  return (
-                                    <>
-                                      <div className="mb-1">
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
-                                          className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
-                                        >
-                                          <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
-                                          View
-                                        </button>
-                                      </div>
-                                      <div className="flex items-center gap-2">
-                                        <div className="flex items-center gap-1.5">
-                                          <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
-                                          <span className="text-white/20 font-light select-none">:</span>
-                                          {level ? (
-                                            <div className={cn(
-                                              "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
-                                              level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
-                                            )}>
-                                              {level}
-                                            </div>
-                                          ) : (
-                                            <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
-                                          )}
-                                          {booster.status === 'DUPLICATION' && (
-                                            <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
-                                              <Copy className="w-2.5 h-2.5" />
-                                              Duplicate
-                                            </div>
-                                          )}
-                                        </div>
-                                        
-                                        <span className="text-white/20 font-light select-none">:</span>
-                                        
-                                        <div className="flex flex-wrap gap-1.5">
-                                          {tg && (
-                                            <div className="flex flex-col items-center gap-1">
-                                              <div 
-                                                className={cn(
-                                                  "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
-                                                  booster.contactStartedOn === 'TELEGRAM' 
-                                                    ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
-                                                    : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
-                                                )}
-                                                onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
-                                              >
-                                                <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
-                                                <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
-                                              </div>
-                                              <button 
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  updateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM');
-                                                }}
-                                                className={cn(
-                                                  "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
-                                                  booster.contactStartedOn === 'TELEGRAM'
-                                                    ? "bg-blue-500 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]"
-                                                    : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10"
-                                                )}
-                                                title="Mark as Contacted via Telegram"
-                                              >
-                                                <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'TELEGRAM' ? "stroke-[4]" : "stroke-[2]")} />
-                                              </button>
-                                            </div>
-                                          )}
-                                          {ds && (
-                                            <div className="flex flex-col items-center gap-1">
-                                              <div 
-                                                className={cn(
-                                                  "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
-                                                  booster.contactStartedOn === 'DISCORD'
-                                                    ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
-                                                    : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
-                                                )}
-                                                onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
-                                              >
-                                                <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-                                                <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
-                                              </div>
-                                              <button 
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  updateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD');
-                                                }}
-                                                className={cn(
-                                                  "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
-                                                  booster.contactStartedOn === 'DISCORD'
-                                                    ? "bg-indigo-500 border-indigo-400 text-white shadow-[0_0_10px_rgba(99,102,241,0.5)]"
-                                                    : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/10"
-                                                )}
-                                                title="Mark as Contacted via Discord"
-                                              >
-                                                <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'DISCORD' ? "stroke-[4]" : "stroke-[2]")} />
-                                              </button>
-                                            </div>
-                                          )}
-                                          {!tg && !ds && !rawName && (
-                                            <span className="text-[12px] text-white/30 italic">No Identity</span>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      {showBigName && (
-                                        <div className="pl-5 border-l border-white/10 ml-1.5 -mt-1 group-hover:border-[#D4AF37]/30 transition-colors">
-                                          <span className="text-sm font-bold text-white/90 group-hover:text-[#D4AF37] transition-colors truncate block">
-                                            {rawName}
-                                          </span>
-                                        </div>
-                                      )}
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                            </td>
-                            <td 
-                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games"
-                              onClick={() => setEditingCell({ id: booster.id, field: 'games', value: booster.games || '' })}
+                    return (
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        {rows.map((booster) => {
+                          const level = getNotificationLevel(booster);
+                          const statusConfig = STATUS_CONFIG[booster.status];
+                          return (
+                            <motion.tr
+                              key={booster.id}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              className={cn(
+                                "group hover:bg-white/[0.02] transition-colors relative",
+                                selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
+                              )}
                             >
-                               <div className="flex items-center justify-between gap-1">
-                                 <CellContent val={booster.games} col="Games" />
-                                 <Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37] transition-all" />
-                               </div>
-                            </td>
-                            {activeTab === 'RECRUITED' && (
-                              <td className="px-3 py-2 border-b border-white/5">
-                                <button
-                                  onClick={() => copyMasterInfo(booster)}
-                                  className={cn(
-                                    "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm border",
-                                    copiedId === `master-${booster.id}`
-                                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
-                                      : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/20"
-                                  )}
-                                >
-                                  {copiedId === `master-${booster.id}` ? (
-                                    <>
-                                      <Check className="w-3.5 h-3.5" />
-                                      Copied
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Copy className="w-3.5 h-3.5" />
-                                      Copy for Master
-                                    </>
-                                  )}
-                                </button>
-                              </td>
-                            )}
-                            <td 
-                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/status"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                setStatusPickerAnchor({ id: booster.id, rect });
-                              }}
-                            >
-                              <div className="flex flex-col gap-1.5 relative">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className={cn(
-                                    "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all",
-                                    statusConfig?.color
-                                  )}>
-                                    {statusConfig?.funnelLabel || booster.status}
-                                  </div>
-                                  <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
-                                </div>
-                                
-                                <StatusProgress booster={booster} onMarkChecked={onMarkChecked} />
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 border-b border-white/5">
+                               <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
                               <div 
-                                onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
+                                onClick={() => toggleBoosterSelection(booster.id)}
                                 className={cn(
-                                  "group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
-                                  booster.crmAccount 
-                                    ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
-                                    : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
+                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+                                  selectedBoosterIds.has(booster.id) 
+                                    ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
+                                    : "border-white/10 group-hover:border-[#D4AF37]/40"
                                 )}
                               >
-                                <span className={cn(
-                                  "text-[12px] uppercase font-bold tracking-wider truncate",
-                                  !booster.crmAccount && "italic font-normal text-[10px]"
-                                )}>
-                                  {booster.crmAccount || 'Not Assigned'}
-                                </span>
-                                <div className="flex items-center gap-1.5 ml-2">
-                                  {booster.crmAccount && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        copyToClipboard(booster.crmAccount!, `crm-${booster.id}`);
-                                      }}
-                                      className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
-                                      title="Copy CRM Account"
-                                    >
-                                       <Copy className="w-3 h-3 text-emerald-400" />
-                                    </button>
-                                  )}
-                                  <Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100 transition-opacity" />
-                                </div>
+                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
                               </div>
                             </td>
-                            <td 
-                              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/region"
-                              onClick={() => setEditingCell({ id: booster.id, field: 'region', value: booster.region || '' })}
-                            >
-                              <div className="flex flex-col gap-0.5">
-                                <div className="flex items-center justify-between gap-1.5">
-                                   <div className="flex items-center gap-1.5">
-                                     <Globe className="w-2 h-2 text-[#D4AF37]/70" />
-                                     <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
-                                   </div>
-                                   <Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37] transition-all" />
-                                </div>
-                                <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
-                               </div>
-                            </td>
-                            {dynamicColumns.map(col => {
-                              const val = col === 'Status' ? booster.status : 
-                                         col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() :
-                                         (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
-                              
-                              return (
-                                <td 
-                                  key={col} 
-                                  className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/dynamic"
-                                  onClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <CellContent val={val} col={col} />
-                                    <Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] transition-all shrink-0" />
-                                  </div>
-                                </td>
-                              );
-                            })}
-                            <td className="px-3 py-2 border-b border-white/5 text-right">
-                               <div className="flex items-center justify-end gap-2">
-                                  <div className="relative group/status-pick inline-block">
-                                    <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">
-                                      <Zap className="w-4 h-4" />
-                                    </button>
-                                    <div className="absolute right-0 bottom-full mb-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl opacity-0 translate-y-2 invisible group-hover/status-pick:opacity-100 group-hover/status-pick:visible group-hover/status-pick:translate-y-0 transition-all z-50 py-1 overflow-hidden">
-                                      {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
-                                        <button
-                                          key={status}
-                                          onClick={() => updateStatus(booster.id, status as any)}
-                                          className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
-                                        >
-                                          {STATUS_CONFIG[status].funnelLabel}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  <button 
-                                    onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes || '' })}
-                                    className={cn(
-                                      "p-1.5 rounded-xl border transition-all relative shadow-sm hover:scale-105 active:scale-95",
-                                      booster.notes 
-                                        ? "bg-amber-500/10 border-amber-500/30 text-amber-500 hover:shadow-[0_0_15px_rgba(245,158,11,0.15)]" 
-                                        : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
-                                    )}
-                                    title={booster.notes || "Add Note"}
-                                  >
-                                    <PlusCircle className={cn("w-4 h-4", booster.notes && "fill-current/10")} />
-                                  </button>
-                               </div>
-                            </td>
-                          </motion.tr>
-                        );
-                      })}
-                  </AnimatePresence>
+                            {renderRowCells(booster, level, statusConfig)}
+                            </motion.tr>
+                          );
+                        })}
+                      </AnimatePresence>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -2961,8 +3082,8 @@ Added to MasterFile`;
             )}
 
             {filteredBoosters.length === 0 && !refreshing && (
-              <div className="py-32 text-center border border-dashed border-[#2D2D30] rounded-xl">
-                <p className="font-serif italic text-white/80 text-lg">No booster records found.</p>
+              <div className="py-32 text-center border border-dashed border-[#2D2D30] rounded-xl text-white/40">
+                No records found matching current criteria.
               </div>
             )}
             </div>

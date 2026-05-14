@@ -40,7 +40,8 @@ import {
   Edit2,
   Zap,
   PlusCircle,
-  Maximize2
+  Maximize2,
+  Mail
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -76,7 +77,8 @@ interface Booster {
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   lastStatusCheckedAt?: string;
   crmAccount?: string;
-  contactStartedOn: 'TELEGRAM' | 'DISCORD' | null;
+  contactStartedOn: 'TELEGRAM' | 'DISCORD' | 'EMAIL' | null;
+  email?: string;
   notes: string;
   formId: string;
   fields: Record<string, string>;
@@ -129,6 +131,7 @@ const computeFastSearchContent = (b: any): string => {
     String(b.id || ''),
     String(b.telegram || ''),
     String(b.discord || ''),
+    String(b.email || ''),
     String(b.crmAccount || ''),
   ];
   return parts.join(' ').toLowerCase();
@@ -541,8 +544,8 @@ export default function App() {
   const [statusPickerAnchor, setStatusPickerAnchor] = useState<{ id: string, rect: DOMRect } | null>(null);
   const [forms, setForms] = useState<Jotform[]>([]);
   const [hiddenForms, setHiddenForms] = useState<Jotform[]>([]);
-  const [selectedForm, setSelectedForm] = useState<string>('');
-  const [dashboardMode, setDashboardMode] = useState(true);
+  const [selectedForm, setSelectedForm] = useState<string>(() => localStorage.getItem('selected_database') || '');
+  const [dashboardMode, setDashboardMode] = useState(() => !localStorage.getItem('selected_database'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingFormId, setEditingFormId] = useState<string | null>(null);
@@ -750,6 +753,8 @@ export default function App() {
 
       // 2. Get local forms from Firebase
       const fbLocalForms = await firebaseService.getForms();
+      const localActive = fbLocalForms.filter(f => !ignored.includes(String(f.id)));
+      const localHidden = fbLocalForms.filter(f => ignored.includes(String(f.id)));
 
       // 3. Get Jotform forms from Server Proxy
       let jotformActive: any[] = [];
@@ -773,7 +778,7 @@ export default function App() {
         jotformActive = filtered.filter((f: any) => !ignored.includes(String(f.id)));
         jotformHidden = filtered.filter((f: any) => ignored.includes(String(f.id)));
         
-        if (Array.isArray(allJf) && allJf.length > 0 && jotformActive.length === 0 && fbLocalForms.length === 0) {
+        if (Array.isArray(allJf) && allJf.length > 0 && jotformActive.length === 0 && localActive.length === 0) {
            jotformError = 'Found forms in Jotform, but none match "BECOME A". Try manual import in Settings.';
         }
       } catch (e: any) {
@@ -784,7 +789,7 @@ export default function App() {
         }
       }
 
-      const combined = [...fbLocalForms, ...jotformActive].map(f => ({
+      const combined = [...localActive, ...jotformActive].map(f => ({
         ...f,
         title: renames[f.id] || f.title
       }));
@@ -799,12 +804,15 @@ export default function App() {
       });
 
       setForms(combined);
-      setHiddenForms(jotformHidden.map(f => ({ ...f, title: renames[f.id] || f.title })));
+      setHiddenForms([...localHidden, ...jotformHidden].map(f => ({ ...f, title: renames[f.id] || f.title })));
 
       // Auto-select
       if (!selectedForm && combined.length > 0) {
         const main = combined.find(f => f.title.toLowerCase().includes('become a booster'));
-        setSelectedForm(main ? main.id : combined[0].id);
+        const defaultId = main ? main.id : combined[0].id;
+        setSelectedForm(defaultId);
+        localStorage.setItem('selected_database', defaultId);
+        setDashboardMode(false);
       } else if (combined.length === 0) {
         setError(jotformError || 'No forms found. Connect a Jotform account or create a local database.');
         setLoading(false);
@@ -952,7 +960,7 @@ export default function App() {
       
       const trimmedValue = field === 'crmAccount' ? value.trim() : value;
       const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: trimmedValue };
-      const isCoreField = ['telegram', 'discord', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
+      const isCoreField = ['telegram', 'discord', 'email', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
       
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
@@ -1156,6 +1164,7 @@ export default function App() {
             createdAt: (d as any).createdAt || d.updatedAt,
             telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
             discord: d.discord || getFVal(['discord', 'ds']),
+            email: d.email || getFVal(['email', 'mail']),
             games: d.games || getFVal(['games', 'game']),
             workingHours: d.workingHours || getFVal(['hours', 'time']),
             region: d.region || getFVal(['region', 'country']),
@@ -1204,6 +1213,7 @@ export default function App() {
             createdAt: sub.created_at,
             telegram: getVal('Telegram') || getVal('Contact'),
             discord: getVal('Discord'),
+            email: getVal('email') || getVal('mail'),
             games: getVal('game') || getVal('What games'),
             workingHours: getVal('How long') || getVal('Working hours'),
             region: getVal('region'),
@@ -1334,37 +1344,60 @@ export default function App() {
     }
   };
 
-  const deleteForm = async (formId: string) => {
-    if (!confirm('Hide this form permanently from the workspace?')) return;
+  const hideDatabase = async (formId: string) => {
+    if (!confirm('Hide this database from the workspace? You can restore it from Archived list.')) return;
     try {
-      const set = await firebaseService.getSettings();
-      const ignored = [...(set?.ignoredForms || [])];
+      // Optimistic update
+      const formToHide = forms.find(f => f.id === formId);
+      if (formToHide) {
+        setForms(prev => prev.filter(f => f.id !== formId));
+        setHiddenForms(prev => [...prev, formToHide]);
+      }
+
+      const settings = await firebaseService.getSettings();
+      const ignored = [...(settings?.ignoredForms || [])];
       if (!ignored.includes(formId)) ignored.push(formId);
       await firebaseService.updateSettings({ ignoredForms: ignored });
       
-      fetchForms();
       if (selectedForm === formId) {
         const next = forms.find(f => f.id !== formId);
-        setSelectedForm(next ? next.id : '');
+        const nextId = next ? next.id : '';
+        setSelectedForm(nextId);
+        if (nextId) localStorage.setItem('selected_database', nextId);
+        else localStorage.removeItem('selected_database');
       }
+      setNotification({ message: 'Database moved to Archive', type: 'SUCCESS' });
+      // Re-fetch to ensure sync
+      fetchForms();
     } catch (err) {
       console.error('Failed to hide form');
+      fetchForms(); // Revert on error
     }
   };
 
   const restoreForm = async (formId: string) => {
     try {
-      const set = await firebaseService.getSettings();
-      const ignored = (set?.ignoredForms || []).filter(id => id !== formId);
+      // Optimistic update
+      const formToRestore = hiddenForms.find(f => f.id === formId);
+      if (formToRestore) {
+        setHiddenForms(prev => prev.filter(f => f.id !== formId));
+        setForms(prev => [...prev, formToRestore]);
+      }
+
+      const settings = await firebaseService.getSettings();
+      const ignored = (settings?.ignoredForms || []).filter(id => id !== formId);
       await firebaseService.updateSettings({ ignoredForms: ignored });
+      setNotification({ message: 'Database restored', type: 'SUCCESS' });
       fetchForms();
     } catch (err) {
       console.error('Failed to restore form');
+      fetchForms(); // Revert on error
     }
   };
 
   useEffect(() => {
     if (selectedForm) {
+      localStorage.setItem('selected_database', selectedForm);
       const cached = localStorage.getItem(`cache_boosters_${selectedForm}`);
       if (cached) {
         setBoosters(JSON.parse(cached));
@@ -1495,7 +1528,7 @@ export default function App() {
     }
   };
 
-  const updateContactStart = async (id: string, contactType: 'TELEGRAM' | 'DISCORD' | null) => {
+  const updateContactStart = async (id: string, contactType: 'TELEGRAM' | 'DISCORD' | 'EMAIL' | null) => {
     try {
       await firebaseService.updateContactStart(id, selectedForm, contactType || '');
       setBoosters(prev => prev.map(b => b.id === id ? { ...b, contactStartedOn: contactType } : b));
@@ -1611,13 +1644,15 @@ Added to MasterFile`;
               const rawName = booster.fields?.['Name/Contact'] || '';
               const tg = booster.telegram || '';
               const ds = booster.discord || '';
+              const em = booster.email || '';
               const showBigName = rawName && 
                                   rawName.toLowerCase() !== tg.toLowerCase() && 
-                                  rawName.toLowerCase() !== ds.toLowerCase();
+                                  rawName.toLowerCase() !== ds.toLowerCase() &&
+                                  rawName.toLowerCase() !== em.toLowerCase();
 
               return (
                 <>
-                  <div className="mb-1">
+                  <div className="mb-1 flex items-center gap-2">
                     <button
                       onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
                       className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
@@ -1625,6 +1660,18 @@ Added to MasterFile`;
                       <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
                       View
                     </button>
+                    {showBigName && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingCell({ id: booster.id, field: 'Name/Contact', value: rawName });
+                        }}
+                        className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all active:scale-95"
+                        title="Edit Real Name"
+                      >
+                         <Edit2 className="w-2 h-2" />
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="flex items-center gap-1.5">
@@ -1650,7 +1697,7 @@ Added to MasterFile`;
                     
                     <span className="text-white/20 font-light select-none">:</span>
                     
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-2">
                       {tg && (
                         <div className="flex flex-col items-center gap-1">
                           <div 
@@ -1664,6 +1711,15 @@ Added to MasterFile`;
                           >
                             <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
                             <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingCell({ id: booster.id, field: 'telegram', value: tg });
+                              }}
+                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
                           </div>
                           <button 
                             onClick={(e) => {
@@ -1695,6 +1751,15 @@ Added to MasterFile`;
                           >
                             <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
                             <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingCell({ id: booster.id, field: 'discord', value: ds });
+                              }}
+                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
                           </div>
                           <button 
                             onClick={(e) => {
@@ -1713,8 +1778,67 @@ Added to MasterFile`;
                           </button>
                         </div>
                       )}
-                      {!tg && !ds && !rawName && (
-                        <span className="text-[12px] text-white/30 italic">No Identity</span>
+                      
+                      {em && (
+                        <div className="flex flex-col items-center gap-1 group/em-block">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'EMAIL' ? null : 'EMAIL');
+                            }}
+                            className={cn(
+                              "flex flex-col items-center gap-1 transition-all",
+                              booster.contactStartedOn === 'EMAIL' ? "scale-105" : "hover:scale-105"
+                            )}
+                            title={booster.contactStartedOn === 'EMAIL' ? "Unmark Email Sent" : "Mark as Email Sent"}
+                          >
+                             <div className={cn(
+                               "w-8 h-8 rounded-xl border flex items-center justify-center transition-all shadow-md relative group/mail-icon",
+                               booster.contactStartedOn === 'EMAIL'
+                                 ? "bg-emerald-500 border-emerald-400 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                                 : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50"
+                             )}>
+                               <Mail className={cn("w-4 h-4", booster.contactStartedOn === 'EMAIL' ? "stroke-[3]" : "stroke-[2]")} />
+                               {booster.contactStartedOn === 'EMAIL' && (
+                                 <div className="absolute -top-1 -right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm border border-emerald-200">
+                                   <Check className="w-2.5 h-2.5 stroke-[5]" />
+                                 </div>
+                               )}
+                               
+                               <div 
+                                 onClick={(e) => {
+                                   e.stopPropagation();
+                                   setEditingCell({ id: booster.id, field: 'email', value: em });
+                                 }}
+                                 className="absolute -bottom-1 -left-1 bg-[#141416] border border-white/10 rounded-md p-1 opacity-0 group-hover/em-block:opacity-100 transition-opacity hover:border-[#D4AF37] hover:text-[#D4AF37]"
+                                 title="Edit Email Address"
+                               >
+                                 <Edit2 className="w-2 h-2" />
+                               </div>
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase tracking-tighter transition-colors",
+                               booster.contactStartedOn === 'EMAIL' ? "text-emerald-400" : "text-white/20 group-hover/em-block:text-emerald-400/50"
+                             )}>
+                               {booster.contactStartedOn === 'EMAIL' ? 'Sent' : 'Mail'}
+                             </span>
+                          </button>
+                        </div>
+                      )}
+
+                      {!tg && !ds && !em && !rawName && (
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-[12px] text-white/30 italic">No Identity</span>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCell({ id: booster.id, field: 'telegram', value: '' });
+                            }}
+                            className="text-[9px] uppercase font-black text-[#D4AF37]/60 hover:text-[#D4AF37]"
+                          >
+                            Add Contact
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1982,7 +2106,7 @@ Added to MasterFile`;
         <div className="flex flex-col items-center gap-6 max-w-sm px-6 text-center">
           <RefreshCw className="w-10 h-10 animate-spin text-[#D4AF37]" />
           <div className="space-y-2">
-            <p className="text-white font-serif italic text-xl tracking-widest">Recruiter.OS Initializing...</p>
+            <p className="text-white font-serif italic text-xl tracking-widest">Recruitment Based Initializing...</p>
             <p className="text-white/40 text-xs uppercase tracking-tighter">Connecting to Enterprise Data Pipelines</p>
           </div>
           
@@ -2060,8 +2184,8 @@ Added to MasterFile`;
             className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
             onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
           >
-            <Layout className="w-6 h-6 shadow-[0_0_15px_rgba(212,175,55,0.3)]" />
-            Recruiter.OS
+            <Shield className="w-6 h-6 shadow-[0_0_15px_rgba(212,175,55,0.3)] text-[#D4AF37]" />
+            Recruitment Based
           </div>
           <div className="flex items-center gap-3">
              <RefreshCw 
@@ -2075,7 +2199,11 @@ Added to MasterFile`;
         </div>
 
         <button
-          onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
+          onClick={() => { 
+            setDashboardMode(true); 
+            setSelectedForm(''); 
+            localStorage.removeItem('selected_database');
+          }}
           className={cn(
             "w-full flex items-center justify-between p-3 rounded-2xl mb-6 transition-all group shadow-lg",
             dashboardMode ? "bg-white/[0.05] ring-2 ring-[#D4AF37]/30" : "hover:bg-white/[0.02]"
@@ -2124,7 +2252,12 @@ Added to MasterFile`;
                     "group flex flex-col gap-1.5 px-3 py-2.5 rounded-2xl transition-all cursor-pointer shadow-lg",
                     isSelected ? "bg-[#141416] ring-2 ring-[#D4AF37]/50 shadow-[0_10px_30px_rgba(0,0,0,0.4)]" : "hover:bg-white/[0.03] active:scale-98"
                   )}
-                  onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); }}
+                  onClick={() => { 
+                    setSelectedForm(form.id); 
+                    setDashboardMode(false); 
+                    setSelectedBoosterIds(new Set()); 
+                    localStorage.setItem('selected_database', form.id);
+                  }}
                 >
                   <div className="flex items-center justify-between gap-3 overflow-hidden">
                     {editingFormId === form.id ? (
@@ -2165,8 +2298,19 @@ Added to MasterFile`;
                           setEditingFormTitle(form.title);
                         }}
                         className="opacity-0 group-hover:opacity-100 hover:text-[#D4AF37] transition-opacity p-0.5"
+                        title="Rename Database"
                       >
                         <Edit2 className="w-2.5 h-2.5" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          hideDatabase(form.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 hover:text-rose-500 transition-opacity p-0.5"
+                        title="Hide Database"
+                      >
+                        <EyeOff className="w-2.5 h-2.5" />
                       </button>
                     </div>
                   </div>
@@ -2186,6 +2330,24 @@ Added to MasterFile`;
                 </div>
               );
             })}
+
+            {showHidden && (
+              <div className="mt-2 space-y-1 bg-white/[0.02] rounded-xl p-2 border border-dashed border-white/10">
+                <span className="text-[9px] text-white/30 uppercase font-black tracking-widest px-2 mb-1 block">Archived Databases</span>
+                {hiddenForms.map(form => (
+                  <div key={form.id} className="flex items-center justify-between gap-2 px-2 py-1.5 hover:bg-white/5 rounded-lg group">
+                    <span className="text-[10px] text-white/50 truncate flex-1">{form.title}</span>
+                    <button 
+                      onClick={() => restoreForm(form.id)}
+                      className="text-[#D4AF37] hover:scale-110 transition-transform p-0.5"
+                      title="Restore Database"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="pt-2 space-y-2">
               <div className="flex items-center gap-2 border-b border-[#2D2D30] focus-within:border-[#D4AF37] transition-colors pb-1">
@@ -2469,7 +2631,13 @@ Added to MasterFile`;
                     <motion.div
                       key={form.id}
                       whileHover={{ y: -5, scale: 1.02 }}
-                      onClick={() => { setSelectedForm(form.id); setDashboardMode(false); setSelectedBoosterIds(new Set()); fetchData(form.id); }}
+                      onClick={() => { 
+                    setSelectedForm(form.id); 
+                    setDashboardMode(false); 
+                    setSelectedBoosterIds(new Set()); 
+                    localStorage.setItem('selected_database', form.id);
+                    fetchData(form.id); 
+                  }}
                       className="bg-white/[0.02] border border-white/10 rounded-3xl p-6 cursor-pointer group transition-all hover:bg-white/[0.05] hover:border-[#D4AF37]/30 shadow-2xl relative overflow-hidden"
                     >
                       <div className={cn("absolute top-0 left-0 w-1.5 h-full opacity-50 transition-all group-hover:opacity-100", colorClass.replace('text-', 'bg-'))} />

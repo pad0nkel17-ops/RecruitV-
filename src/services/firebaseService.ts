@@ -31,6 +31,7 @@ export interface BoosterData {
   crmAccount?: string;
   telegram?: string;
   discord?: string;
+  email?: string;
   games?: string;
   workingHours?: string;
   region?: string;

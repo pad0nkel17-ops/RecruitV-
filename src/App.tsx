@@ -1804,17 +1804,6 @@ Added to MasterFile`;
                                    <Check className="w-2.5 h-2.5 stroke-[5]" />
                                  </div>
                                )}
-                               
-                               <div 
-                                 onClick={(e) => {
-                                   e.stopPropagation();
-                                   setEditingCell({ id: booster.id, field: 'email', value: em });
-                                 }}
-                                 className="absolute -bottom-1 -left-1 bg-[#141416] border border-white/10 rounded-md p-1 opacity-0 group-hover/em-block:opacity-100 transition-opacity hover:border-[#D4AF37] hover:text-[#D4AF37]"
-                                 title="Edit Email Address"
-                               >
-                                 <Edit2 className="w-2 h-2" />
-                               </div>
                              </div>
                              <span className={cn(
                                "text-[9px] font-black uppercase tracking-tighter transition-colors",

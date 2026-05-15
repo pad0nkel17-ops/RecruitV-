@@ -578,9 +578,11 @@ export default function App() {
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
   const [jotformKey, setJotformKey] = useState('');
   const [availableGames, setAvailableGames] = useState<string[]>([]);
+  const [gameEditorSearch, setGameEditorSearch] = useState('');
   const [lastSyncBatchId, setLastSyncBatchId] = useState<string | undefined>();
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
+
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
     const saved = localStorage.getItem('pageSize');
@@ -598,6 +600,12 @@ export default function App() {
   const [scrollPercent, setScrollPercent] = useState(0);
 
   const [notification, setNotification] = useState<{ message: string, type: 'SUCCESS' | 'ERROR' } | null>(null);
+
+  useEffect(() => {
+    if (!editingCell || editingCell.field !== 'games') {
+      setGameEditorSearch('');
+    }
+  }, [editingCell]);
 
   useEffect(() => {
     const handleClickOutside = () => {
@@ -1109,13 +1117,14 @@ export default function App() {
       // Hardcoded fallbacks if Jotform returns nothing but we want to provide something
       const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
       
-      const finalGames = options.length > 0 ? options : (availableGames.length > 0 ? availableGames : hardcodedFallbacks);
+      const mergedSet = new Set([...options, ...availableGames, ...hardcodedFallbacks]);
+      const finalGames = Array.from(mergedSet).filter(Boolean).sort((a, b) => a.localeCompare(b));
       
       setAvailableGames(finalGames);
       
-      // Save globally if we found something new or it was empty
+      // Save globally if we found something new
       if (options.length > 0) {
-        await firebaseService.updateSettings({ availableGames: options });
+        await firebaseService.updateSettings({ availableGames: finalGames });
       }
     } catch (e) {
       console.error('Failed to fetch jotform questions', e);
@@ -2087,6 +2096,12 @@ Added to MasterFile`;
     return Array.from(games).sort();
   }, [boosters]);
 
+  const mergedAvailableGames = useMemo(() => {
+    const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
+    const merged = new Set([...availableGames, ...allGames, ...hardcodedFallbacks]);
+    return Array.from(merged).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, [availableGames, allGames]);
+
   const sidebarGroups = [
     {
       label: 'Recruitment Status',
@@ -2919,18 +2934,26 @@ Added to MasterFile`;
                               setSyncProgress({ current: 0, total: 0 });
                               try {
                                 const headers = { 'x-jotform-api-key': jotformKey };
-                                const resp = await axios.get('/api/jotform-submissions', { 
-                                  params: { formId: selectedForm, limit: 1000 },
-                                  headers
-                                });
+                                let allContent: any[] = [];
+                                for (let offset = 0; offset < 4000; offset += 1000) {
+                                  const resp = await axios.get('/api/jotform-submissions', { 
+                                    params: { formId: selectedForm, limit: 1000, offset },
+                                    headers
+                                  });
+                                  const batch = resp.data.content || [];
+                                  if (batch.length === 0) break;
+                                  allContent = [...allContent, ...batch];
+                                  if (batch.length < 1000) break;
+                                }
                                 
-                                const content = (resp.data.content || []).filter((sub: any) => {
+                                const content = allContent.filter((sub: any) => {
                                   return new Date(sub.created_at).getFullYear() >= 2026;
                                 });
                                 
                                 setSyncProgress({ current: 0, total: content.length });
                                   const batchId = `live_${Date.now()}`;
                                   let addedCount = 0;
+                                  let skippedCount = 0;
   
                                   for (let i = 0; i < content.length; i++) {
                                     const sub = content[i];
@@ -2938,6 +2961,7 @@ Added to MasterFile`;
                                     
                                     const exists = await firebaseService.boosterExists(sId);
                                     if (exists) {
+                                      skippedCount++;
                                       setSyncProgress(prev => ({ ...prev, current: i + 1 }));
                                       continue;
                                     }
@@ -2988,8 +3012,8 @@ Added to MasterFile`;
                                 await firebaseService.updateSettings({ lastSyncBatchId: batchId });
                                 setLastSyncBatchId(batchId);
                                 setNotification({ 
-                                  message: `Live pool synced. Added ${addedCount} new applications to database.`, 
-                                  type: 'SUCCESS' 
+                                  message: `Live Pool: ${addedCount} added, ${skippedCount} already in DB.`, 
+                                  type: addedCount > 0 ? 'SUCCESS' : 'INFO' 
                                 });
                                 fetchData();
                               } catch (err: any) {
@@ -3065,16 +3089,24 @@ Added to MasterFile`;
                                 });
                                 
                                 const headers = { 'x-jotform-api-key': jotformKey };
-                                const resp = await axios.get('/api/jotform-submissions', { 
-                                  params: { formId: selectedForm, filter, limit: 1000 },
-                                  headers
-                                });
+                                let allContent: any[] = [];
+                                for (let offset = 0; offset < 4000; offset += 1000) {
+                                  const resp = await axios.get('/api/jotform-submissions', { 
+                                    params: { formId: selectedForm, filter, limit: 1000, offset },
+                                    headers
+                                  });
+                                  const batch = resp.data.content || [];
+                                  if (batch.length === 0) break;
+                                  allContent = [...allContent, ...batch];
+                                  if (batch.length < 1000) break;
+                                }
                                 
-                                const content = resp.data.content || [];
+                                const content = allContent;
                                 setSyncProgress({ current: 0, total: content.length });
                                 
                                 const batchId = `sync_${Date.now()}`;
                                 let addedCount = 0;
+                                let skippedCount = 0;
 
                                 // Process in background
                                 for (let i = 0; i < content.length; i++) {
@@ -3084,6 +3116,7 @@ Added to MasterFile`;
                                   // CRITICAL: Check if exists to avoid overwriting existing data/status
                                   const exists = await firebaseService.boosterExists(sId);
                                   if (exists) {
+                                    skippedCount++;
                                     setSyncProgress(prev => ({ ...prev, current: i + 1 }));
                                     continue;
                                   }
@@ -3137,8 +3170,8 @@ Added to MasterFile`;
                                 setLastSyncBatchId(batchId);
 
                                 setNotification({ 
-                                  message: `Sync complete. Processed ${content.length} records, added ${addedCount} new applications.`, 
-                                  type: 'SUCCESS' 
+                                  message: `Range Pull: ${addedCount} added, ${skippedCount} already in DB.`, 
+                                  type: addedCount > 0 ? 'SUCCESS' : 'INFO' 
                                 });
                                 fetchData();
                               } catch (err: any) {
@@ -3809,10 +3842,23 @@ Added to MasterFile`;
                       />
                     ) : editingCell.field === 'games' ? (
                       <div className="space-y-4">
-                         <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
-                            {availableGames.length > 0 ? (
+                         <div className="relative">
+                           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
+                           <input 
+                             type="text"
+                             autoFocus
+                             placeholder="Search games..."
+                             className="w-full bg-[#0A0A0B] border border-[#2D2D30] rounded-xl pl-9 pr-4 py-2.5 text-[11px] text-white outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20 transition-all font-mono"
+                             value={gameEditorSearch}
+                             onChange={(e) => setGameEditorSearch(e.target.value)}
+                           />
+                         </div>
+                         <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
+                            {mergedAvailableGames.filter(g => g.toLowerCase().includes(gameEditorSearch.toLowerCase())).length > 0 ? (
                               <div className="grid grid-cols-1 gap-1.5">
-                                {[...availableGames].sort((a, b) => a.localeCompare(b)).map((game, i) => {
+                                {mergedAvailableGames
+                                  .filter(g => g.toLowerCase().includes(gameEditorSearch.toLowerCase()))
+                                  .map((game, i) => {
                                   const currentGames = editingCell.value.split(/[,;]+/).map(g => g.trim()).filter(Boolean);
                                   const isSelected = currentGames.includes(game);
                                   return (
@@ -3825,19 +3871,19 @@ Added to MasterFile`;
                                         setEditingCell({ ...editingCell, value: newGames.join(', ') });
                                       }}
                                       className={cn(
-                                        "flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all",
+                                        "flex items-center gap-3 p-2 rounded-xl border cursor-pointer transition-all",
                                         isSelected 
                                           ? "bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]" 
                                           : "bg-white/5 border-white/10 text-white/40 hover:bg-white/10"
                                       )}
                                     >
                                       <div className={cn(
-                                        "w-4 h-4 rounded border flex items-center justify-center transition-all",
+                                        "w-3.5 h-3.5 rounded border flex items-center justify-center transition-all",
                                         isSelected ? "bg-[#D4AF37] border-[#D4AF37] text-black" : "border-white/20"
                                       )}>
-                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
                                       </div>
-                                      <span className="text-[11px] font-bold uppercase tracking-widest">{game}</span>
+                                      <span className="text-[10px] font-bold uppercase tracking-widest">{game}</span>
                                     </div>
                                   );
                                 })}

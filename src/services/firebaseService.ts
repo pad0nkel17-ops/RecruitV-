@@ -27,6 +27,7 @@ export interface BoosterData {
   status: string;
   notes: string;
   contactStartedOn: string | null;
+  createdAt: string;
   statusHistory?: { status: string; timestamp: string; crmAccount?: string }[];
   crmAccount?: string;
   telegram?: string;

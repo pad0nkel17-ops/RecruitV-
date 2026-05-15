@@ -205,10 +205,10 @@ const getNotificationLevel = (booster: Booster) => {
   const updated = booster.statusUpdatedAt ? new Date(booster.statusUpdatedAt).getTime() : created;
   
   if (booster.status === 'WAITING FOR RECRUITMENT') {
-    const hoursWaiting = (now - updated) / (1000 * 60 * 60);
+    const hoursWaiting = (now - created) / (1000 * 60 * 60);
     if (hoursWaiting > 96) return 'URGENT';
     if (hoursWaiting > 48) return 'STALE';
-    return 'NEW'; // All WAITING entries are NEW until they qualify for STALE/URGENT or move
+    return 'NEW'; 
   }
   
   if (booster.status === 'RECRUITMENT IN PROCESS') {
@@ -988,6 +988,7 @@ export default function App() {
           notes: '',
           contactStartedOn: null,
           fieldOverrides: updatedOverrides,
+          createdAt: now,
           updatedAt: now,
           ...(isCoreField ? { [field]: trimmedValue } : {})
         };
@@ -1300,6 +1301,7 @@ export default function App() {
         status: 'WAITING FOR RECRUITMENT',
         notes: '',
         contactStartedOn: null,
+        createdAt: now,
         updatedAt: now,
         fields: newRowData
       };
@@ -2927,56 +2929,57 @@ Added to MasterFile`;
                                 });
                                 
                                 setSyncProgress({ current: 0, total: content.length });
-                                const batchId = `live_${Date.now()}`;
-                                let addedCount = 0;
-
-                                for (let i = 0; i < content.length; i++) {
-                                  const sub = content[i];
-                                  const sId = String(sub.id);
-                                  
-                                  const exists = await firebaseService.boosterExists(sId);
-                                  if (exists) {
-                                    setSyncProgress(prev => ({ ...prev, current: i + 1 }));
-                                    continue;
-                                  }
-
-                                  const answers = sub.answers || {};
-                                  const formatAnswer = (ans: any) => {
-                                    if (typeof ans === 'object' && ans !== null) {
-                                      if (ans.other) return String(ans.other);
-                                      return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                  const batchId = `live_${Date.now()}`;
+                                  let addedCount = 0;
+  
+                                  for (let i = 0; i < content.length; i++) {
+                                    const sub = content[i];
+                                    const sId = String(sub.id);
+                                    
+                                    const exists = await firebaseService.boosterExists(sId);
+                                    if (exists) {
+                                      setSyncProgress(prev => ({ ...prev, current: i + 1 }));
+                                      continue;
                                     }
-                                    return String(ans || '');
-                                  };
-
-                                  const dynamicFields: Record<string, string> = {};
-                                  Object.values(answers).forEach((a: any) => {
-                                    if (a.text && a.answer !== undefined) {
-                                       dynamicFields[a.text] = formatAnswer(a.answer);
-                                    }
-                                  });
-
-                                  const getVal = (label: string) => {
-                                      const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
-                                      return entry ? formatAnswer(entry.answer) : '';
-                                  };
-                                  
-                                  await firebaseService.saveBoosterData({
-                                    id: sId,
-                                    formId: selectedForm,
-                                    status: 'WAITING FOR RECRUITMENT',
-                                    notes: '',
-                                    contactStartedOn: null,
-                                    updatedAt: new Date().toISOString(),
-                                    fields: dynamicFields,
-                                    telegram: getVal('Telegram') || getVal('Contact'),
-                                    discord: getVal('Discord'),
-                                    email: getVal('email') || getVal('mail'),
-                                    games: getVal('game') || getVal('What games'),
-                                    workingHours: getVal('How long') || getVal('Working hours'),
-                                    region: getVal('region'),
-                                    syncBatchId: batchId
-                                  });
+  
+                                    const answers = sub.answers || {};
+                                    const formatAnswer = (ans: any) => {
+                                      if (typeof ans === 'object' && ans !== null) {
+                                        if (ans.other) return String(ans.other);
+                                        return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                      }
+                                      return String(ans || '');
+                                    };
+  
+                                    const dynamicFields: Record<string, string> = {};
+                                    Object.values(answers).forEach((a: any) => {
+                                      if (a.text && a.answer !== undefined) {
+                                         dynamicFields[a.text] = formatAnswer(a.answer);
+                                      }
+                                    });
+  
+                                    const getVal = (label: string) => {
+                                        const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
+                                        return entry ? formatAnswer(entry.answer) : '';
+                                    };
+                                    
+                                    await firebaseService.saveBoosterData({
+                                      id: sId,
+                                      formId: selectedForm,
+                                      status: 'WAITING FOR RECRUITMENT',
+                                      notes: '',
+                                      contactStartedOn: null,
+                                      createdAt: sub.created_at || new Date().toISOString(),
+                                      updatedAt: new Date().toISOString(),
+                                      fields: dynamicFields,
+                                      telegram: getVal('Telegram') || getVal('Contact'),
+                                      discord: getVal('Discord'),
+                                      email: getVal('email') || getVal('mail'),
+                                      games: getVal('game') || getVal('What games'),
+                                      workingHours: getVal('How long') || getVal('Working hours'),
+                                      region: getVal('region'),
+                                      syncBatchId: batchId
+                                    });
                                   
                                   addedCount++;
                                   setSyncProgress(prev => ({ ...prev, current: i + 1 }));
@@ -3113,6 +3116,7 @@ Added to MasterFile`;
                                     status: 'WAITING FOR RECRUITMENT',
                                     notes: '',
                                     contactStartedOn: null,
+                                    createdAt: sub.created_at || new Date().toISOString(),
                                     updatedAt: new Date().toISOString(),
                                     fields: dynamicFields,
                                     telegram: getVal('Telegram') || getVal('Contact'),

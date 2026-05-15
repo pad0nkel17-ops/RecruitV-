@@ -47,6 +47,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { firebaseService, type BoosterData, type Settings as AppSettings, type Form as AppForm } from './services/firebaseService';
+import { LogViewModal } from './components/LogViewModal';
+
 let config: any = { projectId: 'Firebase' };
 try {
   // @ts-ignore
@@ -566,11 +568,17 @@ export default function App() {
   const [newRowData, setNewRowData] = useState<Record<string, string>>({});
   const [fieldSettings, setFieldSettings] = useState<Record<string, Record<string, string[]>>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<'FIELDS' | 'BUILDER' | 'CONNECTION'>('FIELDS');
+  const [configTab, setConfigTab] = useState<'FIELDS' | 'BUILDER' | 'CONNECTION' | 'TOOLS'>('FIELDS');
+  const [isSyncingHistorical, setIsSyncingHistorical] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
+  const [syncHistoryRange, setSyncHistoryRange] = useState({ start: '', end: '' });
+  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
+  const [isSyncingLive, setIsSyncingLive] = useState(false);
   const [configStatus, setConfigStatus] = useState<string>('ALL');
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
   const [jotformKey, setJotformKey] = useState('');
   const [availableGames, setAvailableGames] = useState<string[]>([]);
+  const [lastSyncBatchId, setLastSyncBatchId] = useState<string | undefined>();
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
@@ -745,11 +753,13 @@ export default function App() {
       const colRenames = fbSettings?.columnRenames || {};
       const jfKey = fbSettings?.jotformApiKey || '';
       const cachedGames = fbSettings?.availableGames || [];
+      const lastBatch = fbSettings?.lastSyncBatchId;
 
       setFieldSettings(fSettings);
       setColumnRenames(colRenames);
       setJotformKey(jfKey);
       setAvailableGames(cachedGames);
+      setLastSyncBatchId(lastBatch);
 
       // 2. Get local forms from Firebase
       const fbLocalForms = await firebaseService.getForms();
@@ -2772,6 +2782,15 @@ Added to MasterFile`;
                   >
                     API Keys
                   </button>
+                  <button 
+                    onClick={() => setConfigTab('TOOLS')}
+                    className={cn(
+                      "pb-2 text-[10px] uppercase tracking-widest transition-all px-2",
+                      configTab === 'TOOLS' ? "text-[#D4AF37] border-b-2 border-[#D4AF37]" : "text-white/80 hover:text-white"
+                    )}
+                  >
+                    Tools
+                  </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
@@ -2860,6 +2879,324 @@ Added to MasterFile`;
                         >
                           {isTestingKey ? <RefreshCw className="w-3 h-3 animate-spin" /> : 'Verify & Save Key'}
                         </button>
+                      </div>
+                    </div>
+                  ) : configTab === 'TOOLS' ? (
+                    <div className="space-y-8">
+                      <div className="space-y-4 p-5 rounded-2xl bg-[#0A0A0B] border border-white/5">
+                        <div className="flex items-center gap-3 mb-2">
+                           <div className="p-2 rounded-lg bg-indigo-500/10">
+                              <Zap className={cn("w-4 h-4 text-indigo-400", isSyncingLive && "animate-spin")} />
+                           </div>
+                           <div>
+                              <p className="text-[12px] text-white font-black uppercase tracking-widest">Commit Live Pool</p>
+                              <p className="text-[10px] text-white/40 italic">Save current Jotform submissions (2026+) to database</p>
+                           </div>
+                        </div>
+
+                        {isSyncingLive ? (
+                          <div className="space-y-3 pt-2">
+                            <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                              <motion.div 
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
+                                className="h-full bg-indigo-400"
+                              />
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-mono text-indigo-400 uppercase tracking-widest">Processing live pool...</span>
+                              <span className="text-[10px] font-mono text-white/60">{syncProgress.current} / {syncProgress.total}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <button 
+                            disabled={!selectedForm || selectedForm.startsWith('local_') || !jotformKey}
+                            onClick={async () => {
+                              if (!selectedForm || selectedForm.startsWith('local_')) return;
+                              setIsSyncingLive(true);
+                              setSyncProgress({ current: 0, total: 0 });
+                              try {
+                                const headers = { 'x-jotform-api-key': jotformKey };
+                                const resp = await axios.get('/api/jotform-submissions', { 
+                                  params: { formId: selectedForm, limit: 1000 },
+                                  headers
+                                });
+                                
+                                const content = (resp.data.content || []).filter((sub: any) => {
+                                  return new Date(sub.created_at).getFullYear() >= 2026;
+                                });
+                                
+                                setSyncProgress({ current: 0, total: content.length });
+                                const batchId = `live_${Date.now()}`;
+                                let addedCount = 0;
+
+                                for (let i = 0; i < content.length; i++) {
+                                  const sub = content[i];
+                                  const sId = String(sub.id);
+                                  
+                                  const exists = await firebaseService.boosterExists(sId);
+                                  if (exists) {
+                                    setSyncProgress(prev => ({ ...prev, current: i + 1 }));
+                                    continue;
+                                  }
+
+                                  const answers = sub.answers || {};
+                                  const formatAnswer = (ans: any) => {
+                                    if (typeof ans === 'object' && ans !== null) {
+                                      if (ans.other) return String(ans.other);
+                                      return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                    }
+                                    return String(ans || '');
+                                  };
+
+                                  const dynamicFields: Record<string, string> = {};
+                                  Object.values(answers).forEach((a: any) => {
+                                    if (a.text && a.answer !== undefined) {
+                                       dynamicFields[a.text] = formatAnswer(a.answer);
+                                    }
+                                  });
+
+                                  const getVal = (label: string) => {
+                                      const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
+                                      return entry ? formatAnswer(entry.answer) : '';
+                                  };
+                                  
+                                  await firebaseService.saveBoosterData({
+                                    id: sId,
+                                    formId: selectedForm,
+                                    status: 'WAITING FOR RECRUITMENT',
+                                    notes: '',
+                                    contactStartedOn: null,
+                                    updatedAt: new Date().toISOString(),
+                                    fields: dynamicFields,
+                                    telegram: getVal('Telegram') || getVal('Contact'),
+                                    discord: getVal('Discord'),
+                                    email: getVal('email') || getVal('mail'),
+                                    games: getVal('game') || getVal('What games'),
+                                    workingHours: getVal('How long') || getVal('Working hours'),
+                                    region: getVal('region'),
+                                    syncBatchId: batchId
+                                  });
+                                  
+                                  addedCount++;
+                                  setSyncProgress(prev => ({ ...prev, current: i + 1 }));
+                                }
+                                
+                                await firebaseService.updateSettings({ lastSyncBatchId: batchId });
+                                setLastSyncBatchId(batchId);
+                                setNotification({ 
+                                  message: `Live pool synced. Added ${addedCount} new applications to database.`, 
+                                  type: 'SUCCESS' 
+                                });
+                                fetchData();
+                              } catch (err: any) {
+                                setNotification({ message: `Live sync failed: ${err.message}`, type: 'ERROR' });
+                              } finally {
+                                setIsSyncingLive(false);
+                              }
+                            }}
+                            className="w-full py-3.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-white/60 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
+                          >
+                            Execute Live Pull
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="space-y-4 p-5 rounded-2xl bg-[#0A0A0B] border border-white/5">
+                        <div className="flex items-center gap-3 mb-2">
+                           <div className="p-2 rounded-lg bg-[#D4AF37]/10">
+                              <RefreshCw className={cn("w-4 h-4 text-[#D4AF37]", isSyncingHistorical && "animate-spin")} />
+                           </div>
+                           <div>
+                              <p className="text-[12px] text-white font-black uppercase tracking-widest">Manual History Sync</p>
+                              <p className="text-[10px] text-white/40 italic">Load older Jotform submissions into database</p>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] uppercase font-bold text-white/50 pl-1">Start Date</label>
+                            <input 
+                              type="date"
+                              value={syncHistoryRange.start}
+                              onChange={(e) => setSyncHistoryRange(prev => ({ ...prev, start: e.target.value }))}
+                              className="w-full bg-black/40 border border-[#2D2D30] text-[11px] text-white px-3 py-2.5 rounded-xl outline-none focus:border-[#D4AF37]/50 transition-all font-mono"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] uppercase font-bold text-white/50 pl-1">End Date</label>
+                            <input 
+                              type="date"
+                              value={syncHistoryRange.end}
+                              onChange={(e) => setSyncHistoryRange(prev => ({ ...prev, end: e.target.value }))}
+                              className="w-full bg-black/40 border border-[#2D2D30] text-[11px] text-white px-3 py-2.5 rounded-xl outline-none focus:border-[#D4AF37]/50 transition-all font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        {isSyncingHistorical ? (
+                          <div className="space-y-3 pt-2">
+                            <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                              <motion.div 
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
+                                className="h-full bg-[#D4AF37]"
+                              />
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-mono text-[#D4AF37] uppercase tracking-widest">Processing submissions...</span>
+                              <span className="text-[10px] font-mono text-white/60">{syncProgress.current} / {syncProgress.total}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <button 
+                            disabled={!syncHistoryRange.start || !syncHistoryRange.end || !jotformKey}
+                            onClick={async () => {
+                              if (!selectedForm || selectedForm.startsWith('local_')) return;
+                              setIsSyncingHistorical(true);
+                              setSyncProgress({ current: 0, total: 0 });
+                              try {
+                                const filter = JSON.stringify({
+                                  "created_at:gt": `${syncHistoryRange.start} 00:00:00`,
+                                  "created_at:lt": `${syncHistoryRange.end} 23:59:59`
+                                });
+                                
+                                const headers = { 'x-jotform-api-key': jotformKey };
+                                const resp = await axios.get('/api/jotform-submissions', { 
+                                  params: { formId: selectedForm, filter, limit: 1000 },
+                                  headers
+                                });
+                                
+                                const content = resp.data.content || [];
+                                setSyncProgress({ current: 0, total: content.length });
+                                
+                                const batchId = `sync_${Date.now()}`;
+                                let addedCount = 0;
+
+                                // Process in background
+                                for (let i = 0; i < content.length; i++) {
+                                  const sub = content[i];
+                                  const sId = String(sub.id);
+                                  
+                                  // CRITICAL: Check if exists to avoid overwriting existing data/status
+                                  const exists = await firebaseService.boosterExists(sId);
+                                  if (exists) {
+                                    setSyncProgress(prev => ({ ...prev, current: i + 1 }));
+                                    continue;
+                                  }
+
+                                  const answers = sub.answers || {};
+                                  
+                                  const formatAnswer = (ans: any) => {
+                                    if (typeof ans === 'object' && ans !== null) {
+                                      if (ans.other) return String(ans.other);
+                                      return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                    }
+                                    return String(ans || '');
+                                  };
+
+                                  const dynamicFields: Record<string, string> = {};
+                                  Object.values(answers).forEach((a: any) => {
+                                    if (a.text && a.answer !== undefined) {
+                                       dynamicFields[a.text] = formatAnswer(a.answer);
+                                    }
+                                  });
+
+                                  const getVal = (label: string) => {
+                                      const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
+                                      return entry ? formatAnswer(entry.answer) : '';
+                                  };
+                                  
+                                  await firebaseService.saveBoosterData({
+                                    id: sId,
+                                    formId: selectedForm,
+                                    status: 'WAITING FOR RECRUITMENT',
+                                    notes: '',
+                                    contactStartedOn: null,
+                                    updatedAt: new Date().toISOString(),
+                                    fields: dynamicFields,
+                                    telegram: getVal('Telegram') || getVal('Contact'),
+                                    discord: getVal('Discord'),
+                                    email: getVal('email') || getVal('mail'),
+                                    games: getVal('game') || getVal('What games'),
+                                    workingHours: getVal('How long') || getVal('Working hours'),
+                                    region: getVal('region'),
+                                    syncBatchId: batchId
+                                  });
+                                  
+                                  addedCount++;
+                                  setSyncProgress(prev => ({ ...prev, current: i + 1 }));
+                                }
+                                
+                                // Save the last batch ID for rollback
+                                await firebaseService.updateSettings({ lastSyncBatchId: batchId });
+                                setLastSyncBatchId(batchId);
+
+                                setNotification({ 
+                                  message: `Sync complete. Processed ${content.length} records, added ${addedCount} new applications.`, 
+                                  type: 'SUCCESS' 
+                                });
+                                fetchData();
+                              } catch (err: any) {
+                                setNotification({ message: `Sync failed: ${err.message}`, type: 'ERROR' });
+                              } finally {
+                                setIsSyncingHistorical(false);
+                              }
+                            }}
+                            className="w-full py-3.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-white/60 hover:text-[#D4AF37] hover:border-[#D4AF37]/50 hover:bg-[#D4AF37]/5 transition-all disabled:opacity-20 disabled:cursor-not-allowed group"
+                          >
+                            Execute History Pull
+                            {!jotformKey && <span className="block mt-1 text-[8px] text-rose-500 lowercase tracking-normal">Setup API Key first</span>}
+                          </button>
+                        )}
+
+                        {lastSyncBatchId && (
+                           <div className="pt-4 border-t border-white/5 space-y-3">
+                              <p className="text-[9px] font-bold text-rose-500 uppercase tracking-widest pl-1">Danger Zone</p>
+                              <button 
+                                onClick={async () => {
+                                  if (!lastSyncBatchId || !confirm('Are you sure you want to rollback the last sync? This will delete all applications added in that session.')) return;
+                                  setIsRollingBack(true);
+                                  try {
+                                    const boosters = await firebaseService.getBoostersByBatch(lastSyncBatchId);
+                                    for (const b of boosters) {
+                                      await firebaseService.deleteBooster(b.id);
+                                    }
+                                    await firebaseService.updateSettings({ lastSyncBatchId: undefined });
+                                    setLastSyncBatchId(undefined);
+                                    setNotification({ message: `Successfully rolled back ${boosters.length} records.`, type: 'SUCCESS' });
+                                    fetchData();
+                                  } catch (err: any) {
+                                    setNotification({ message: `Rollback failed: ${err.message}`, type: 'ERROR' });
+                                  } finally {
+                                    setIsRollingBack(false);
+                                  }
+                                }}
+                                className="w-full py-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-rose-500 hover:bg-rose-500/20 transition-all flex items-center justify-center gap-2"
+                              >
+                                {isRollingBack ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                                Rollback Last Pull
+                              </button>
+                           </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-4 p-5 rounded-2xl bg-[#0A0A0B] border border-white/5 opacity-60">
+                         <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-lg bg-emerald-500/10">
+                               <Shield className="w-4 h-4 text-emerald-500" />
+                            </div>
+                            <div>
+                               <p className="text-[12px] text-white font-black uppercase tracking-widest">Database Health</p>
+                               <p className="text-[10px] text-white/40 italic">Global duplicate analysis and cleanup</p>
+                            </div>
+                         </div>
+                         <button 
+                            onClick={() => scanGlobalDuplicates()}
+                            className="w-full py-3.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-white/60 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all"
+                         >
+                            Run Global Integrity Scan
+                         </button>
                       </div>
                     </div>
                   ) : (
@@ -3424,80 +3761,10 @@ Added to MasterFile`;
         {/* Application Detail View Modal */}
         <AnimatePresence>
           {viewingBooster && (
-            <div className="fixed inset-0 z-[500] flex items-center justify-center p-4">
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setViewingBooster(null)}
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-              />
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-              >
-                {/* Header */}
-                <div className="bg-[#EFF6FF] px-6 py-4 border-b border-[#DBEAFE] relative">
-                  <h2 className="text-[#1E3A8A] font-bold text-lg">
-                    {viewingBooster.fields['Email'] || viewingBooster.fields['Name'] || viewingBooster.id}
-                  </h2>
-                  <p className="text-[#60A5FA] text-[11px] font-medium mt-0.5 uppercase tracking-wider">
-                    Updated at {new Date(viewingBooster.statusUpdatedAt || viewingBooster.createdAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}
-                  </p>
-                  <button 
-                    onClick={() => setViewingBooster(null)}
-                    className="absolute top-4 right-4 p-2 text-[#94A3B8] hover:text-[#475569] transition-colors rounded-lg hover:bg-black/5"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-200">
-                  {Object.entries(viewingBooster.fields).map(([label, val], idx) => {
-                    const value = String(val);
-                    if (!value || value === '—') return null;
-                    
-                    const isLongText = value.length > 80;
-                    const parts = value.split(/[,;]+/).map(p => p.trim()).filter(Boolean);
-                    const isBadgeList = parts.length > 1 && !isLongText;
-
-                    const getDetailStyles = (val: string) => {
-                      const v = val.toLowerCase();
-                      if (v.includes('full time') || v.includes('job') || v.includes('8 hours')) return "bg-[#F5F3FF] text-[#6D28D9] border-[#EDE9FE]";
-                      if (v.includes('represent') || v.includes('team') || v.includes('community')) return "bg-[#EFF6FF] text-[#2563EB] border-[#DBEAFE]";
-                      if (v.includes('eu') || v.includes('selfplay')) return "bg-[#FDF2F8] text-[#DB2777] border-[#FCE7F3]";
-                      if (v.includes('offer') || v.includes('play themself')) return "bg-[#FFF7ED] text-[#C2410C] border-[#FFEDD5]";
-                      return "bg-[#F8FAFC] text-[#475569] border-[#E2E8F0]";
-                    };
-
-                    return (
-                      <div key={idx} className="space-y-2 pb-6 border-b border-[#F1F5F9] last:border-0 last:pb-0">
-                        <h3 className="text-[#94A3B8] text-[11px] font-bold uppercase tracking-[0.1em] leading-tight">{label}</h3>
-                        <div className="flex flex-wrap gap-2">
-                          {isBadgeList ? (
-                            parts.map((p, pi) => (
-                              <span key={pi} className={cn("px-3 py-1 text-xs font-semibold rounded border", getDetailStyles(p))}>
-                                {p}
-                              </span>
-                            ))
-                          ) : (
-                            <div className={cn(
-                              "text-[#334155] text-sm leading-relaxed whitespace-pre-wrap font-medium",
-                              !isLongText && "px-3 py-1 bg-[#F8FAFC] rounded border border-[#E2E8F0]"
-                            )}>
-                              {value}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </motion.div>
-            </div>
+            <LogViewModal 
+              booster={viewingBooster} 
+              onClose={() => setViewingBooster(null)} 
+            />
           )}
         </AnimatePresence>
 

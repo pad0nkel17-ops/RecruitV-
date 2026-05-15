@@ -32,19 +32,19 @@ router.get('/jotform-forms', async (req, res) => {
 
 router.get('/jotform-submissions', async (req, res) => {
   try {
-    const { formId } = req.query;
+    const { formId, filter, offset, limit } = req.query;
     const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
     
+    const params: any = { apiKey, limit: limit || 1000 };
+    if (filter) params.filter = filter;
+    if (offset) params.offset = offset;
+
     let response;
     try {
-      response = await axios.get(`https://eu-api.jotform.com/form/${formId}/submissions`, { 
-        params: { apiKey, limit: 1000 } 
-      });
+      response = await axios.get(`https://eu-api.jotform.com/form/${formId}/submissions`, { params });
     } catch (e) {
-      response = await axios.get(`https://api.jotform.com/form/${formId}/submissions`, { 
-        params: { apiKey, limit: 1000 } 
-      });
+      response = await axios.get(`https://api.jotform.com/form/${formId}/submissions`, { params });
     }
     res.json(response.data);
   } catch (err) {

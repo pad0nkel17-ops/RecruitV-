@@ -40,6 +40,7 @@ export interface BoosterData {
   statusUpdatedAt?: string;
   updatedAt: string;
   fields?: Record<string, any>;
+  syncBatchId?: string;
 }
 
 export interface Settings {
@@ -52,6 +53,7 @@ export interface Settings {
   fieldSettings: Record<string, any>;
   jotformApiKey?: string;
   availableGames?: string[];
+  lastSyncBatchId?: string;
 }
 
 const FORMS_COL = 'forms';
@@ -193,5 +195,20 @@ export const firebaseService = {
     } else {
       await updateDoc(ref, { contactStartedOn: contactType });
     }
+  },
+
+  async boosterExists(id: string): Promise<boolean> {
+    const sDoc = await getDoc(doc(db, BOOSTER_DATA_COL, id));
+    return sDoc.exists();
+  },
+
+  async getBoostersByBatch(batchId: string): Promise<BoosterData[]> {
+    const q = query(collection(db, BOOSTER_DATA_COL), where('syncBatchId', '==', batchId));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(d => d.data() as BoosterData);
+  },
+
+  async deleteBooster(id: string) {
+    await deleteDoc(doc(db, BOOSTER_DATA_COL, id));
   }
 };

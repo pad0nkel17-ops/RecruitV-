@@ -270,11 +270,12 @@ export const firebaseService = {
     }
   },
 
-  async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string, crmAccount?: string) {
+  async updateBoosterStatus(id: string, formId: string, status?: string, notes?: string, crmAccount?: string, initialData?: Partial<BoosterData>) {
     const ref = doc(db, BOOSTER_DATA_COL, id);
     try {
       const snap = await getDoc(ref);
       const now = new Date().toISOString();
+      const createdAt = initialData?.createdAt || now;
       
       const trimmedCrm = crmAccount?.trim();
       
@@ -290,12 +291,14 @@ export const firebaseService = {
           formId,
           status: status || 'WAITING FOR RECRUITMENT',
           notes: notes || '',
-          createdAt: now,
+          createdAt: createdAt,
           updatedAt: now,
           statusUpdatedAt: now,
           contactStartedOn: null,
           statusHistory: [historyEntry],
+          ...initialData
         };
+        if (status) newDoc.status = status; // override if initialData has it differently
         if (trimmedCrm !== undefined) newDoc.crmAccount = trimmedCrm;
         await setDoc(ref, newDoc);
       } else {

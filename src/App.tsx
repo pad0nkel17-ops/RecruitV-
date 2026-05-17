@@ -153,6 +153,16 @@ const computeDeepSearchContent = (b: any): string => {
   return parts.join(' ').toLowerCase();
 };
 
+const pickEarliestDate = (...dates: any[]) => {
+  const validDates = dates
+    .map(d => (typeof d === 'string' || typeof d === 'number') ? new Date(d) : d)
+    .filter(d => d instanceof Date && !isNaN(d.getTime()) && d.getTime() > 1000000000) // Filter out very old/unix start
+    .map(d => d.getTime());
+  
+  if (validDates.length === 0) return new Date().toISOString();
+  return new Date(Math.min(...validDates)).toISOString();
+};
+
 const enhanceBooster = (b: any): Booster => {
   const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt || new Date().toISOString();
 
@@ -990,9 +1000,21 @@ export default function App() {
       const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: trimmedValue };
       const isCoreField = ['telegram', 'discord', 'email', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
       
+      const booster = boosters.find(b => String(b.id) === sId);
+      const initialData = booster ? {
+        telegram: booster.telegram,
+        discord: booster.discord,
+        email: booster.email,
+        games: booster.games,
+        workingHours: booster.workingHours,
+        region: booster.region,
+        createdAt: booster.createdAt,
+        fields: booster.fields
+      } : {};
+
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
-         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue);
+         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue, undefined, undefined, initialData);
       } else {
         const newEntry: BoosterData = existing ? {
           ...existing,
@@ -1250,7 +1272,11 @@ export default function App() {
           return foundKey ? fields[foundKey] : '';
         };
 
-        const fbCreated = (d as any).createdAt || getFVal(['created_at', 'submission_date', 'date', 'form_date', 'posted']) || d.updatedAt || new Date().toISOString();
+        const fbCreated = pickEarliestDate(
+          (d as any).createdAt, 
+          getFVal(['created_at', 'submission_date', 'date', 'form_date', 'posted']),
+          d.updatedAt
+        );
         const fallbackId = String(d.id);
         const itemDate = new Date(fbCreated).getTime();
         if (isNaN(itemDate) || itemDate < LIMIT_DATE) return; // Skip old or invalid records
@@ -1350,7 +1376,14 @@ export default function App() {
 
         const boosterObj = enhanceBooster({
           id: sId,
-          createdAt: sub.created_at || sub.createdAt || sub.submission_date || new Date().toISOString(),
+          createdAt: pickEarliestDate(
+            sub.created_at, 
+            sub.createdAt, 
+            sub.submission_date, 
+            existing?.createdAt,
+            getVal('Date'),
+            getVal('Time')
+          ),
           telegram: getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username') || getVal('Handle'),
           discord: getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social') || getVal('Username') || getVal('Handle'),
           email: getVal('email') || getVal('mail') || getVal('Mail'),
@@ -1372,6 +1405,27 @@ export default function App() {
       });
 
       merged = Array.from(mergedMap.values());
+
+      // BACKGROUND DATA INTEGRITY FIX
+      // If we found a better/different date than what's in Firebase, sync it back
+      const improvedIds: string[] = [];
+      merged.forEach(b => {
+        const fbVersion = idMap.get(b.id);
+        if (fbVersion && fbVersion.createdAt !== b.createdAt) {
+          improvedIds.push(b.id);
+          // Sync improved date back to Firebase in background
+          const { fastSearchContent, deepSearchContent, ...cleanData } = b as any;
+          firebaseService.saveBoosterData({
+             ...fbVersion,
+             createdAt: b.createdAt,
+             updatedAt: new Date().toISOString()
+          } as BoosterData).catch(err => console.error('Failed to sync improved date:', err));
+        }
+      });
+
+      if (improvedIds.length > 0) {
+        console.log(`Synced ${improvedIds.length} improved dates to Firebase`);
+      }
 
       merged.sort((a, b) => b.statusSortTime - a.statusSortTime);
       setBoosters(merged);
@@ -1626,7 +1680,19 @@ export default function App() {
       return;
     }
     try {
-      await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount);
+      const booster = boosters.find(b => String(b.id) === sId);
+      const initialData = booster ? {
+        telegram: booster.telegram,
+        discord: booster.discord,
+        email: booster.email,
+        games: booster.games,
+        workingHours: booster.workingHours,
+        region: booster.region,
+        createdAt: booster.createdAt,
+        fields: booster.fields
+      } : {};
+
+      await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount, initialData);
       
       setNotification({ message: `Booster moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });
 
@@ -1690,7 +1756,20 @@ export default function App() {
       }
 
       await Promise.all(
-        sIds.map(id => firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount))
+        sIds.map(id => {
+          const booster = boosters.find(b => String(b.id) === id);
+          const initialData = booster ? {
+            telegram: booster.telegram,
+            discord: booster.discord,
+            email: booster.email,
+            games: booster.games,
+            workingHours: booster.workingHours,
+            region: booster.region,
+            createdAt: booster.createdAt,
+            fields: booster.fields
+          } : {};
+          return firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount, initialData);
+        })
       );
       
       setNotification({ message: `${sIds.length} Boosters moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });

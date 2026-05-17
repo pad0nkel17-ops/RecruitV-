@@ -1132,7 +1132,12 @@ export default function App() {
     }
   };
 
-  const fetchData = async (formIdTarget?: string) => {
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archivedLoaded, setArchivedLoaded] = useState(false);
+
+  const [archivedStatusFilter, setArchivedStatusFilter] = useState<string | 'ALL'>('ALL');
+
+  const fetchData = async (formIdTarget?: string, forceAll = false) => {
     const idToFetch = formIdTarget || selectedForm;
     if (!idToFetch) return;
     
@@ -1183,8 +1188,15 @@ export default function App() {
       }
 
       // 2. Fetch Firebase booster_data
-      // Always fetch ALL to ensure we have correct status/archive state for every Jotform submission
-      fbData = await firebaseService.getBoosterData(idToFetch, 'ALL');
+      // PERFORMANCE OPTIMIZATION: Only fetch ACTIVE by default unless explicitly requested or in Archive tab
+      const shouldLoadAll = forceAll || activeTab === 'ARCHIVED' || jotformSubs.length > 0;
+      // Actually, to prevent the "Deduplication Chaos", we ALWAYS need 'ALL' Ids if possible.
+      // But we can optimize the storage.
+      // Let's stick to 'ALL' if we have Jotform, otherwise 'ACTIVE' is enough for local.
+      const filter = (!idToFetch.startsWith('local_') || shouldLoadAll) ? 'ALL' : 'ACTIVE';
+      
+      fbData = await firebaseService.getBoosterData(idToFetch, filter);
+      if (filter === 'ALL') setArchivedLoaded(true);
 
       // 3. Merge
       const idMap = new Map<string, BoosterData>();
@@ -1500,6 +1512,52 @@ export default function App() {
     } catch (err) {
       console.error('Failed to restore form');
       fetchForms(); // Revert on error
+    }
+  };
+
+  const archiveAllByStatus = async (status: string) => {
+    const toArchive = boosters.filter(b => b.status === status && !b.isArchived);
+    if (toArchive.length === 0) return;
+    
+    if (!window.confirm(`Are you sure you want to archive ALL ${toArchive.length} boosters in status "${status}"?`)) return;
+
+    setIsArchiving(true);
+    setRefreshing(true);
+    try {
+      const ids = toArchive.map(b => b.id);
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50);
+        await Promise.all(batch.map(id => firebaseService.archiveBooster(id, true)));
+      }
+      setBoosters(prev => prev.map(b => (b.status === status && !b.isArchived) ? { ...b, isArchived: true } : b));
+      setNotification({ message: `Archived ${toArchive.length} boosters from ${status}`, type: 'SUCCESS' });
+    } catch (err) {
+      setNotification({ message: 'Failed to archive by status', type: 'ERROR' });
+    } finally {
+      setIsArchiving(false);
+      setRefreshing(false);
+    }
+  };
+
+  const unarchiveAllByStatus = async (status: string | 'ALL') => {
+    const toRestore = boosters.filter(b => b.isArchived && (status === 'ALL' || b.status === status));
+    if (toRestore.length === 0) return;
+    
+    if (!window.confirm(`Are you sure you want to RESTORE ALL ${toRestore.length} boosters ${status === 'ALL' ? '' : `in status "${status}" `}from Archive?`)) return;
+
+    setRefreshing(true);
+    try {
+      const ids = toRestore.map(b => b.id);
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50);
+        await Promise.all(batch.map(id => firebaseService.archiveBooster(id, false)));
+      }
+      setBoosters(prev => prev.map(b => (b.isArchived && (status === 'ALL' || b.status === status)) ? { ...b, isArchived: false } : b));
+      setNotification({ message: `Restored ${toRestore.length} boosters to active recruitment`, type: 'SUCCESS' });
+    } catch (err) {
+      setNotification({ message: 'Failed to restore by status', type: 'ERROR' });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -2181,6 +2239,7 @@ Added to MasterFile`;
       // 1. Cheap checks first: Archive, Tab and Game Filter
       if (activeTab === 'ARCHIVED') {
         if (!b.isArchived) return false;
+        if (archivedStatusFilter !== 'ALL' && b.status !== archivedStatusFilter) return false;
       } else {
         if (b.isArchived) return false;
         if (activeTab !== 'ALL' && b.status !== activeTab) return false;
@@ -2278,10 +2337,17 @@ Added to MasterFile`;
     {
       label: 'Archive',
       items: [
-        { label: 'Archive', value: 'ARCHIVED', icon: Archive }
+        { label: 'System Archive', value: 'ARCHIVED', icon: Archive }
       ]
     }
   ];
+
+  const handleSidebarTabClick = (tabValue: string) => {
+    setActiveTab(tabValue as any);
+    if (tabValue === 'ARCHIVED' && !archivedLoaded) {
+      fetchData(selectedForm, true);
+    }
+  };
 
   if (loading && !refreshing && !boosters.length) {
     return (
@@ -2617,32 +2683,104 @@ Added to MasterFile`;
                 const notificationLevelCount = tabBoosters.filter(b => getNotificationLevel(b)).length;
 
                 return (
-                  <button
-                    key={item.value}
-                    onClick={() => { setActiveTab(item.value); setSelectedBoosterIds(new Set()); }}
-                    className={cn(
-                      "w-auto min-w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-all group/tab relative shadow-sm",
-                      isActive ? "bg-white/[0.04] text-white ring-1 ring-white/10" : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-                    )}
-                  >
-                    <div className="flex items-center gap-3">
-                      <item.icon className={cn("w-4 h-4 transition-colors", isActive ? "text-[#D4AF37]" : "opacity-30 group-hover:opacity-70 dark:group-hover:text-[#D4AF37]")} />
-                      <div className="flex flex-col items-start">
-                        <span className="leading-tight font-medium tracking-tight whitespace-nowrap">{item.label}</span>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className={cn("text-[11px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/40 group-hover:text-white/60")}>
-                            {count.toString().padStart(2, '0')}
-                          </span>
+                  <div key={item.value}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => { handleSidebarTabClick(item.value); setSelectedBoosterIds(new Set()); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { handleSidebarTabClick(item.value); setSelectedBoosterIds(new Set()); } }}
+                      className={cn(
+                        "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-all group/tab relative shadow-sm cursor-pointer outline-none",
+                        isActive ? "bg-white/[0.04] text-white ring-1 ring-white/10" : "text-white/50 hover:text-white hover:bg-white/[0.02]"
+                      )}
+                    >
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <item.icon className={cn("w-4 h-4 transition-colors shrink-0", isActive ? "text-[#D4AF37]" : "opacity-30 group-hover:opacity-70 dark:group-hover:text-[#D4AF37]")} />
+                        <div className="flex flex-col items-start overflow-hidden">
+                          <span className="leading-tight font-medium tracking-tight whitespace-nowrap truncate w-full">{item.label}</span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className={cn("text-[11px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/40 group-hover:text-white/60")}>
+                              {count.toString().padStart(2, '0')}
+                            </span>
+                          </div>
                         </div>
                       </div>
+                      
+                      <div className="flex items-center gap-2">
+                        {isActive && !['ALL', 'ARCHIVED'].includes(item.value) && tabBoosters.length > 0 && (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); archiveAllByStatus(item.value); }}
+                            className="p-1 px-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-500/60 hover:text-rose-500 transition-all opacity-0 group-hover/tab:opacity-100 flex items-center gap-1.5 relative z-10"
+                            title={`Archive ALL in ${item.label}`}
+                          >
+                             <Archive className="w-3 h-3" />
+                             <span className="text-[8px] font-black uppercase tracking-tighter">Sweep</span>
+                          </button>
+                        )}
+                        {isActive && (
+                           <motion.div 
+                             layoutId="activeTabIndicator"
+                             className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.5)]"
+                           />
+                        )}
+                        {notificationLevelCount > 0 && !isActive && (
+                          <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_#F43F5E]" />
+                        )}
+                      </div>
                     </div>
-                    {isActive && (
-                       <motion.div 
-                         layoutId="activeTabIndicator"
-                         className="absolute right-3 w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.5)]"
-                       />
+
+                    {isActive && item.value === 'ARCHIVED' && (
+                      <div className="mt-1.5 ml-4 border-l border-white/5 pl-3 space-y-1 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => setArchivedStatusFilter('ALL')}
+                            className={cn(
+                              "flex-1 text-left px-3 py-1.5 rounded-lg text-[9px] uppercase font-black tracking-[0.1em] transition-colors",
+                              archivedStatusFilter === 'ALL' ? "bg-white/10 text-white" : "text-white/30 hover:text-white/60"
+                            )}
+                          >
+                            All Applications
+                          </button>
+                          {archivedStatusFilter === 'ALL' && boosters.some(b => b.isArchived) && (
+                             <button 
+                               onClick={(e) => { e.stopPropagation(); unarchiveAllByStatus('ALL'); }}
+                               className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500/60 hover:text-emerald-500 transition-all group/restore-btn flex items-center justify-center"
+                               title="Restore ALL archived boosters"
+                             >
+                                <RefreshCw className="w-2.5 h-2.5" />
+                             </button>
+                          )}
+                        </div>
+                        {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((statusKey) => {
+                          const statusCount = boosters.filter(b => b.isArchived && b.status === statusKey).length;
+                          if (statusCount === 0 && archivedLoaded) return null;
+                          return (
+                            <div key={statusKey} className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => setArchivedStatusFilter(statusKey)}
+                                className={cn(
+                                  "flex-1 text-left px-3 py-1.5 rounded-lg text-[9px] uppercase font-black tracking-[0.1em] transition-colors flex justify-between items-center group/sub",
+                                  archivedStatusFilter === statusKey ? "bg-[#D4AF37]/10 text-[#D4AF37]" : "text-white/30 hover:text-white/60"
+                                )}
+                              >
+                                <span>{STATUS_CONFIG[statusKey].funnelLabel}</span>
+                                <span className="text-[8px] font-mono opacity-50 group-hover/sub:opacity-100">{statusCount}</span>
+                              </button>
+                              {archivedStatusFilter === statusKey && statusCount > 0 && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); unarchiveAllByStatus(statusKey); }}
+                                  className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500/60 hover:text-emerald-500 transition-all flex items-center justify-center shrink-0"
+                                  title={`Restore ALL archived in ${STATUS_CONFIG[statusKey].funnelLabel}`}
+                                >
+                                   <RefreshCw className="w-2.5 h-2.5" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

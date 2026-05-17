@@ -1151,7 +1151,8 @@ export default function App() {
           if (jotformKey) headers['x-jotform-api-key'] = jotformKey;
 
           let allSubs: any[] = [];
-          // Fetch up to 4 pages to get at least 4000 records if they exist
+          // Fetch up to 4 pages if needed, but deduplicate by ID
+          const seenIds = new Set<string>();
           for (let offset = 0; offset < 4000; offset += 1000) {
             const jfResp = await axios.get('/api/jotform-submissions', { 
               params: { formId: idToFetch, limit: 1000, offset },
@@ -1159,13 +1160,22 @@ export default function App() {
             });
             const batch = jfResp.data.content || [];
             if (batch.length === 0) break;
-            allSubs = [...allSubs, ...batch];
-            if (batch.length < 1000) break;
+            
+            let addedNew = false;
+            batch.forEach((sub: any) => {
+              if (!seenIds.has(sub.id)) {
+                seenIds.add(sub.id);
+                allSubs.push(sub);
+                addedNew = true;
+              }
+            });
+            
+            if (!addedNew || batch.length < 1000) break;
           }
 
           jotformSubs = allSubs.filter((sub: any) => {
             const subDate = new Date(sub.created_at);
-            return subDate >= new Date('2025-08-01');
+            return subDate >= new Date('2025-08-01'); 
           }).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         } catch (e) {
           console.error('Failed to fetch Jotform submissions');
@@ -1195,121 +1205,140 @@ export default function App() {
 
       let merged: Booster[] = [];
 
-      if (idToFetch.startsWith('local_')) {
-        // Local form data is entirely in Firebase
-        merged = fbData.map(d => {
-          const fields = d.fields || {};
-          const getFVal = (keys: string[]) => {
-            const foundKey = Object.keys(fields).find(k => 
-              keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
-            );
-            return foundKey ? fields[foundKey] : '';
-          };
+      // Unified Merge Logic
+      const mergedMap = new Map<string, Booster>();
+      const contactPool = new Map<string, string>(); // contactKey -> firstId encountered
+      
+      // 1. Index all Firebase items as base
+      const LIMIT_DATE = new Date('2025-08-01').getTime();
+      fbData.forEach(d => {
+        const itemDate = new Date((d as any).createdAt || d.updatedAt || 0).getTime();
+        if (itemDate < LIMIT_DATE) return; // Skip old records
 
-          return enhanceBooster({
-            id: String(d.id),
-            createdAt: (d as any).createdAt || d.updatedAt,
-            telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
-            discord: d.discord || getFVal(['discord', 'ds']),
-            email: d.email || getFVal(['email', 'mail']),
-            games: d.games || getFVal(['games', 'game']),
-            workingHours: d.workingHours || getFVal(['hours', 'time']),
-            region: d.region || getFVal(['region', 'country']),
-            status: d.status as any,
-            statusUpdatedAt: d.statusUpdatedAt || d.updatedAt,
-            statusHistory: d.statusHistory || [],
-            crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
-            contactStartedOn: d.contactStartedOn as any,
-            notes: d.notes,
-            formId: d.formId,
-            fields: fields,
-            isArchived: d.isArchived || false,
-          });
+        const sId = String(d.id);
+        const fields = d.fields || {};
+        const getFVal = (keys: string[]) => {
+          const foundKey = Object.keys(fields).find(k => 
+            keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
+          );
+          return foundKey ? fields[foundKey] : '';
+        };
+
+        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || getFVal(['telegram', 'tg', 'contact'])).toString().toLowerCase().trim();
+        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || getFVal(['discord', 'ds'])).toString().toLowerCase().trim();
+        const em = (d.email || d.fields?.Email || getFVal(['email', 'mail'])).toString().toLowerCase().trim();
+        const cKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
+                     (ds && ds !== '—' && ds.length > 2) ? ds : 
+                     (em && em.includes('@')) ? em : '';
+
+        if (cKey && !contactPool.has(cKey)) {
+          contactPool.set(cKey, sId);
+        } else if (cKey && contactPool.has(cKey) && !['RECRUITED', 'LOST', 'RESERVE', 'REJECTED'].includes(d.status) && contactPool.get(cKey) !== sId) {
+          // If we have multiple Firebase records, we should ideally treat them as duplicates too
+          // but for now we just let them exist in the pool as the base
+        }
+
+        mergedMap.set(sId, enhanceBooster({
+          id: sId,
+          createdAt: (d as any).createdAt || d.updatedAt || new Date().toISOString(),
+          telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
+          discord: d.discord || getFVal(['discord', 'ds']),
+          email: d.email || getFVal(['email', 'mail']),
+          games: d.games || getFVal(['games', 'game']),
+          workingHours: d.workingHours || getFVal(['hours', 'time']),
+          region: d.region || getFVal(['region', 'country']),
+          status: d.status as any,
+          statusUpdatedAt: d.statusUpdatedAt || d.updatedAt,
+          statusHistory: d.statusHistory || [],
+          crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
+          contactStartedOn: d.contactStartedOn as any,
+          notes: d.notes || '',
+          formId: d.formId,
+          fields: fields,
+          isArchived: d.isArchived || false,
+        }));
+      });
+
+      // 2. Overlay Jotform submissions
+      jotformSubs.forEach((sub: any) => {
+        const sId = String(sub.id);
+        const answers = sub.answers || {};
+        
+        const formatAnswer = (ans: any) => {
+          if (typeof ans === 'object' && ans !== null) {
+            if (ans.other) return String(ans.other);
+            return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+          }
+          return String(ans || '');
+        };
+
+        const dynamicFields: Record<string, string> = {};
+        Object.values(answers).forEach((a: any) => {
+          if (a.text && a.answer !== undefined) {
+             dynamicFields[a.text] = formatAnswer(a.answer);
+          }
         });
-      } else {
-        // Merge Jotform with Firebase
-        const seenInThisFetch = new Set<string>(); // contact set
 
-        merged = jotformSubs.map((sub: any) => {
-          const sId = String(sub.id);
-          const answers = sub.answers || {};
-          
-          const formatAnswer = (ans: any) => {
-            if (typeof ans === 'object' && ans !== null) {
-              if (ans.other) return String(ans.other);
-              return Object.values(ans).filter(v => typeof v === 'string').join(', ');
-            }
-            return String(ans || '');
-          };
+        const getVal = (label: string) => {
+            const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
+            return entry ? formatAnswer(entry.answer) : '';
+        };
 
-          const dynamicFields: Record<string, string> = {};
-          Object.values(answers).forEach((a: any) => {
-            if (a.text && a.answer !== undefined) {
-               dynamicFields[a.text] = formatAnswer(a.answer);
-            }
-          });
+        const tg = (getVal('Telegram') || getVal('Contact')).toLowerCase().trim();
+        const ds = (getVal('Discord')).toLowerCase().trim();
+        const em = (getVal('email') || getVal('mail')).toLowerCase().trim();
+        const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
+                           (ds && ds !== '—' && ds.length > 2) ? ds : 
+                           (em && em.includes('@')) ? em : '';
 
-          const getVal = (label: string) => {
-              const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
-              return entry ? formatAnswer(entry.answer) : '';
-          };
-
-          const tg = (getVal('Telegram') || getVal('Contact')).toLowerCase().trim();
-          const ds = (getVal('Discord')).toLowerCase().trim();
-          const em = (getVal('email') || getVal('mail')).toLowerCase().trim();
-          const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
-                             (ds && ds !== '—' && ds.length > 2) ? ds : 
-                             (em && em.includes('@')) ? em : '';
-
-          // 1. Direct ID lookup
-          let persist = idMap.get(sId);
-          
-          // 2. Contact-based lookup if not found by ID (look across all firebase records for this form)
-          if (!persist && contactKey) {
-            persist = tgMap.get(contactKey) || dsMap.get(contactKey) || emailMap.get(contactKey);
-          }
-
-          // 3. Status determination
-          let calculatedStatus = (persist?.status || 'WAITING FOR RECRUITMENT') as any;
-          
-          // If this submission is NOT the one tracked in Firebase, it's a duplication
-          if (persist && String(persist.id) !== sId) {
+        const existing = mergedMap.get(sId);
+        let calculatedStatus = existing ? existing.status : 'WAITING FOR RECRUITMENT';
+        
+        // Duplication check
+        if (!existing && contactKey) {
+           const firstId = contactPool.get(contactKey);
+           if (firstId && firstId !== sId) {
              calculatedStatus = 'DUPLICATION';
-          } else if (contactKey && seenInThisFetch.has(contactKey)) {
-             // If we already saw this person in this form during this fetch loop
-             calculatedStatus = 'DUPLICATION';
-          }
+           } else if (!firstId) {
+             contactPool.set(contactKey, sId);
+           }
+        }
 
-          if (contactKey) seenInThisFetch.add(contactKey);
-
-          // Apply field overrides from persist
-          if (persist?.fieldOverrides) {
-            Object.entries(persist.fieldOverrides).forEach(([k, v]) => {
+        // Apply field overrides from existing if we have them
+        if (existing) {
+          // Keep existing fields that were overridden
+          const persistData = idMap.get(sId) || (contactKey ? (tgMap.get(contactKey) || dsMap.get(contactKey) || emailMap.get(contactKey)) : null);
+          if (persistData?.fieldOverrides) {
+            Object.entries(persistData.fieldOverrides).forEach(([k, v]) => {
               if (k !== 'crmAccount') dynamicFields[k] = v;
             });
           }
+        }
 
-          return enhanceBooster({
-            id: sId,
-            createdAt: sub.created_at,
-            telegram: getVal('Telegram') || getVal('Contact'),
-            discord: getVal('Discord'),
-            email: getVal('email') || getVal('mail'),
-            games: getVal('game') || getVal('What games'),
-            workingHours: getVal('How long') || getVal('Working hours'),
-            region: getVal('region'),
-            status: calculatedStatus,
-            statusUpdatedAt: persist?.statusUpdatedAt || persist?.updatedAt || sub.created_at,
-            statusHistory: persist?.statusHistory || [],
-            crmAccount: persist?.crmAccount || persist?.fieldOverrides?.['crmAccount'] || '',
-            contactStartedOn: (persist?.contactStartedOn || null) as any,
-            notes: persist?.notes || '',
-            formId: idToFetch,
-            fields: dynamicFields,
-            isArchived: persist?.isArchived || false,
-          });
+        const boosterObj = enhanceBooster({
+          id: sId,
+          createdAt: sub.created_at,
+          telegram: getVal('Telegram') || getVal('Contact'),
+          discord: getVal('Discord'),
+          email: getVal('email') || getVal('mail'),
+          games: getVal('game') || getVal('What games'),
+          workingHours: getVal('How long') || getVal('Working hours'),
+          region: getVal('region'),
+          status: calculatedStatus as any,
+          statusUpdatedAt: existing?.statusUpdatedAt || sub.created_at,
+          statusHistory: existing?.statusHistory || [],
+          crmAccount: existing?.crmAccount || '',
+          contactStartedOn: (existing?.contactStartedOn || null) as any,
+          notes: existing?.notes || '',
+          formId: idToFetch,
+          fields: dynamicFields,
+          isArchived: existing?.isArchived || false,
         });
-      }
+
+        mergedMap.set(sId, boosterObj);
+      });
+
+      merged = Array.from(mergedMap.values());
 
       merged.sort((a, b) => b.statusSortTime - a.statusSortTime);
       setBoosters(merged);

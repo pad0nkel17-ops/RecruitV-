@@ -719,25 +719,13 @@ export default function App() {
         const summaries: Record<string, DbSummary> = {};
         await Promise.all(forms.map(async (form) => {
            try {
-             const cachedVal = localStorage.getItem(`cache_boosters_${form.id}`);
-             let data: Booster[] = [];
-             if (cachedVal) {
-               data = JSON.parse(cachedVal);
-             } else {
-               const fbData = await firebaseService.getBoosterData(form.id);
-               data = fbData.map(d => ({
-                 id: d.id,
-                 createdAt: d.updatedAt,
-                 status: d.status as any,
-                 statusUpdatedAt: d.updatedAt,
-                 fields: d.fields || {}
-               } as Booster));
-             }
+             // Fetch all data for summaries to ensure accurate counts across all statuses
+             const data = await firebaseService.getBoosterData(form.id, 'ALL');
              
              summaries[form.id] = {
-               urgent: data.filter(b => getNotificationLevel(b) === 'URGENT').length,
-               stale: data.filter(b => getNotificationLevel(b) === 'STALE').length,
-               new: data.filter(b => getNotificationLevel(b) === 'NEW').length,
+               urgent: data.filter(b => getNotificationLevel(b as any) === 'URGENT').length,
+               stale: data.filter(b => getNotificationLevel(b as any) === 'STALE').length,
+               new: data.filter(b => getNotificationLevel(b as any) === 'NEW').length,
                total: data.length
              };
            } catch (e) {
@@ -1185,10 +1173,8 @@ export default function App() {
       }
 
       // 2. Fetch Firebase booster_data
-      let fetchFilter: 'ACTIVE' | 'ARCHIVED' | 'ALL' = 'ACTIVE';
-      if (activeTab === 'ARCHIVED') fetchFilter = 'ARCHIVED';
-      
-      fbData = await firebaseService.getBoosterData(idToFetch, fetchFilter);
+      // Always fetch ALL to ensure we have correct status/archive state for every Jotform submission
+      fbData = await firebaseService.getBoosterData(idToFetch, 'ALL');
 
       // 3. Merge
       let merged: Booster[] = [];
@@ -1280,10 +1266,6 @@ export default function App() {
       setBoosters(merged);
       setError(null);
       
-      // Local storage cache
-      localStorage.setItem(`cache_boosters_${idToFetch}`, JSON.stringify(merged));
-      localStorage.setItem(`cache_time_${idToFetch}`, new Date().toISOString());
-
       // Check for duplicates in background if new entries arrived
       if (jotformSubs.length > 0) {
         setTimeout(() => scanGlobalDuplicates(true), 2000);
@@ -1472,11 +1454,6 @@ export default function App() {
   useEffect(() => {
     if (selectedForm) {
       localStorage.setItem('selected_database', selectedForm);
-      const cached = localStorage.getItem(`cache_boosters_${selectedForm}`);
-      if (cached) {
-        setBoosters(JSON.parse(cached));
-        setLoading(false);
-      }
       fetchData(selectedForm);
     }
   }, [selectedForm]);
@@ -2550,7 +2527,12 @@ Added to MasterFile`;
             <div className="space-y-1">
               {group.items.map((item) => {
                 const isActive = activeTab === item.value;
-                const tabBoosters = item.value === 'ALL' ? boosters : boosters.filter(b => b.status === item.value);
+                const tabBoosters = boosters.filter(b => {
+                  if (item.value === 'ARCHIVED') return b.isArchived;
+                  if (b.isArchived) return false;
+                  if (item.value === 'ALL') return true;
+                  return b.status === item.value;
+                });
                 const count = tabBoosters.length;
                 
                 // Calculate notifications for this tab

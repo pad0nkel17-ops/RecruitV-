@@ -410,12 +410,21 @@ const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkCh
     if (booster.contactStartedOn === 'DISCORD' && booster.discord) return `DS: ${booster.discord}`;
     
     // Fallbacks
-    if (booster.telegram) return `TG: ${booster.telegram}`;
-    if (booster.discord) return `DS: ${booster.discord}`;
-    const fullName = (booster.fields as any)?.['Full name'];
+    if (booster.telegram && booster.telegram !== 'No Identity') return `TG: ${booster.telegram}`;
+    if (booster.discord && booster.discord !== 'No Identity') return `DS: ${booster.discord}`;
+    
+    const f = (booster.fields as any) || {};
+    const fullName = f['Full name'] || f['Name'] || f['Contact Name'];
     if (fullName) return `Name: ${fullName}`;
-    const dsUser = (booster.fields as any)?.['Discord Username'];
+    
+    const dsUser = f['Discord Username'] || f['Discord ID'] || f['DiscordTag'] || f['Discord'];
     if (dsUser) return `DS: ${dsUser}`;
+    
+    const tgUser = f['Telegram Username'] || f['Telegram ID'] || f['Telegram'] || f['TG'];
+    if (tgUser) return `TG: ${tgUser}`;
+
+    if (booster.email) return `Email: ${booster.email}`;
+    
     return 'Identity: Unknown';
   };
 
@@ -1160,7 +1169,7 @@ export default function App() {
           const seenIds = new Set<string>();
           for (let offset = 0; offset < 4000; offset += 1000) {
             const jfResp = await axios.get('/api/jotform-submissions', { 
-              params: { formId: idToFetch, limit: 1000, offset },
+              params: { formId: idToFetch, limit: 1000, offset, t: Date.now() },
               headers
             });
             const batch = jfResp.data.content || [];
@@ -1296,8 +1305,8 @@ export default function App() {
             return entry ? formatAnswer(entry.answer) : '';
         };
 
-        const tg = (getVal('Telegram') || getVal('Contact')).toLowerCase().trim();
-        const ds = (getVal('Discord')).toLowerCase().trim();
+        const tg = (getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username')).toLowerCase().trim();
+        const ds = (getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social')).toLowerCase().trim();
         const em = (getVal('email') || getVal('mail')).toLowerCase().trim();
         const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
                            (ds && ds !== '—' && ds.length > 2) ? ds : 
@@ -1330,12 +1339,12 @@ export default function App() {
         const boosterObj = enhanceBooster({
           id: sId,
           createdAt: sub.created_at,
-          telegram: getVal('Telegram') || getVal('Contact'),
-          discord: getVal('Discord'),
+          telegram: getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username'),
+          discord: getVal('Discord') || getVal('DS') || getVal('Discord ID'),
           email: getVal('email') || getVal('mail'),
-          games: getVal('game') || getVal('What games'),
-          workingHours: getVal('How long') || getVal('Working hours'),
-          region: getVal('region'),
+          games: getVal('game') || getVal('What games') || getVal('Play'),
+          workingHours: getVal('How long') || getVal('Working hours') || getVal('Schedule'),
+          region: getVal('region') || getVal('Country'),
           status: calculatedStatus as any,
           statusUpdatedAt: existing?.statusUpdatedAt || sub.created_at,
           statusHistory: existing?.statusHistory || [],
@@ -2439,7 +2448,8 @@ Added to MasterFile`;
           <div className="flex items-center gap-3">
              <RefreshCw 
                className={cn("w-3.5 h-3.5 cursor-pointer opacity-50 hover:opacity-100 transition-all", refreshing && "animate-spin")} 
-               onClick={() => { fetchForms(); fetchData(); }}
+               onClick={() => { fetchForms(); fetchData(selectedForm, true); }}
+               title="Deep Refresh (Bypass Cache)"
              />
              <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}>
                <X className="w-5 h-5 text-[#94949E]" />
@@ -2707,16 +2717,6 @@ Added to MasterFile`;
                       </div>
                       
                       <div className="flex items-center gap-2">
-                        {isActive && !['ALL', 'ARCHIVED'].includes(item.value) && tabBoosters.length > 0 && (
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); archiveAllByStatus(item.value); }}
-                            className="p-1 px-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-500/60 hover:text-rose-500 transition-all opacity-0 group-hover/tab:opacity-100 flex items-center gap-1.5 relative z-10"
-                            title={`Archive ALL in ${item.label}`}
-                          >
-                             <Archive className="w-3 h-3" />
-                             <span className="text-[8px] font-black uppercase tracking-tighter">Sweep</span>
-                          </button>
-                        )}
                         {isActive && (
                            <motion.div 
                              layoutId="activeTabIndicator"
@@ -3729,6 +3729,17 @@ Added to MasterFile`;
                   <Copy className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
                   Clean Pool
                 </button>
+
+                {!['ALL', 'ARCHIVED'].includes(activeTab) && boosters.filter(b => b.status === activeTab && !b.isArchived).length > 0 && (
+                  <button 
+                    onClick={() => archiveAllByStatus(activeTab)}
+                    className="flex items-center gap-2 px-4 py-1.5 ml-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/20 transition-all shadow-sm group/sweep"
+                    title={`Archive ALL ${STATUS_CONFIG[activeTab as keyof typeof STATUS_CONFIG]?.funnelLabel || activeTab} Applications`}
+                  >
+                    <Archive className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                    Sweep Status
+                  </button>
+                )}
                 {selectedBoosterIds.size > 0 && (
                    <div className="flex items-center gap-2 pl-4 ml-4 border-l border-white/10 animate-in fade-in slide-in-from-left-4">
                       <span className="text-[10px] text-white/40 font-bold uppercase tracking-widest">{selectedBoosterIds.size} Selected</span>

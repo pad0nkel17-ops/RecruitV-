@@ -154,9 +154,15 @@ const computeDeepSearchContent = (b: any): string => {
 };
 
 const enhanceBooster = (b: any): Booster => {
-  const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt;
-  const statusSortTime = new Date(statusUpdatedAt).getTime() || 0;
-  const createdSortTime = new Date(b.createdAt).getTime() || 0;
+  const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt || new Date().toISOString();
+
+  const parseTime = (dateStr: any) => {
+    const t = new Date(dateStr).getTime();
+    return isNaN(t) ? 0 : t;
+  };
+
+  const statusSortTime = parseTime(statusUpdatedAt);
+  const createdSortTime = parseTime(b.createdAt);
 
   return {
     ...b,
@@ -747,7 +753,7 @@ export default function App() {
     }
   }, [forms]);
 
-  const fetchForms = async () => {
+  const fetchForms = async (bypassCache = false) => {
     try {
       setFirebaseStatus('CONNECTING');
       // 1. Get Settings from Firebase
@@ -784,7 +790,10 @@ export default function App() {
         const headers: any = {};
         if (jfKey) headers['x-jotform-api-key'] = jfKey;
 
-        const jfResp = await axios.get('/api/jotform-forms', { headers });
+        const params: any = {};
+        if (bypassCache) params.t = Date.now();
+
+        const jfResp = await axios.get('/api/jotform-forms', { headers, params });
         const allJf = jfResp.data.content || jfResp.data || [];
         
         const filtered = Array.isArray(allJf) ? allJf.filter((f: any) => {
@@ -1241,15 +1250,16 @@ export default function App() {
           return foundKey ? fields[foundKey] : '';
         };
 
-        const fbCreated = (d as any).createdAt || getFVal(['created_at', 'submission_date', 'date']) || d.updatedAt || new Date().toISOString();
+        const fbCreated = (d as any).createdAt || getFVal(['created_at', 'submission_date', 'date', 'form_date', 'posted']) || d.updatedAt || new Date().toISOString();
+        const fallbackId = String(d.id);
         const itemDate = new Date(fbCreated).getTime();
-        if (itemDate < LIMIT_DATE) return; // Skip old records
+        if (isNaN(itemDate) || itemDate < LIMIT_DATE) return; // Skip old or invalid records
 
         const sId = String(d.id);
         
-        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || getFVal(['telegram', 'tg', 'contact'])).toString().toLowerCase().trim();
-        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || getFVal(['discord', 'ds'])).toString().toLowerCase().trim();
-        const em = (d.email || d.fields?.Email || getFVal(['email', 'mail'])).toString().toLowerCase().trim();
+        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || d.fields?.TG || d.fields?.Username || getFVal(['telegram', 'tg', 'contact', 'handle', 'username'])).toString().toLowerCase().trim();
+        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || d.fields?.DS || d.fields?.['Discord Username'] || d.fields?.Social || getFVal(['discord', 'ds', 'handle', 'username'])).toString().toLowerCase().trim();
+        const em = (d.email || d.fields?.Email || d.fields?.mail || getFVal(['email', 'mail'])).toString().toLowerCase().trim();
         const cKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
                      (ds && ds !== '—' && ds.length > 2) ? ds : 
                      (em && em.includes('@')) ? em : '';
@@ -1307,9 +1317,9 @@ export default function App() {
             return entry ? formatAnswer(entry.answer) : '';
         };
 
-        const tg = (getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username')).toLowerCase().trim();
-        const ds = (getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social')).toLowerCase().trim();
-        const em = (getVal('email') || getVal('mail')).toLowerCase().trim();
+        const tg = (getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username') || getVal('Handle')).toLowerCase().trim();
+        const ds = (getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social') || getVal('Username') || getVal('Handle')).toLowerCase().trim();
+        const em = (getVal('email') || getVal('mail') || getVal('Mail')).toLowerCase().trim();
         const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
                            (ds && ds !== '—' && ds.length > 2) ? ds : 
                            (em && em.includes('@')) ? em : '';
@@ -1340,13 +1350,13 @@ export default function App() {
 
         const boosterObj = enhanceBooster({
           id: sId,
-          createdAt: sub.created_at,
-          telegram: getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username'),
-          discord: getVal('Discord') || getVal('DS') || getVal('Discord ID'),
-          email: getVal('email') || getVal('mail'),
-          games: getVal('game') || getVal('What games') || getVal('Play'),
-          workingHours: getVal('How long') || getVal('Working hours') || getVal('Schedule'),
-          region: getVal('region') || getVal('Country'),
+          createdAt: sub.created_at || sub.createdAt || sub.submission_date || new Date().toISOString(),
+          telegram: getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username') || getVal('Handle'),
+          discord: getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social') || getVal('Username') || getVal('Handle'),
+          email: getVal('email') || getVal('mail') || getVal('Mail'),
+          games: getVal('game') || getVal('What games') || getVal('Play') || getVal('Interests'),
+          workingHours: getVal('How long') || getVal('Working hours') || getVal('Schedule') || getVal('Time'),
+          region: getVal('region') || getVal('Country') || getVal('Location'),
           status: calculatedStatus as any,
           statusUpdatedAt: existing?.statusUpdatedAt || sub.created_at,
           statusHistory: existing?.statusHistory || [],
@@ -2450,7 +2460,7 @@ Added to MasterFile`;
           <div className="flex items-center gap-3">
              <RefreshCw 
                className={cn("w-3.5 h-3.5 cursor-pointer opacity-50 hover:opacity-100 transition-all", refreshing && "animate-spin")} 
-               onClick={() => { fetchForms(); fetchData(selectedForm, true); }}
+               onClick={() => { fetchForms(true); fetchData(selectedForm, true); }}
                title="Deep Refresh (Bypass Cache)"
              />
              <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}>

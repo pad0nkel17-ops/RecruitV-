@@ -12,18 +12,37 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const router = express.Router();
 
+// Simple in-memory cache for Jotform requests
+const jotformCache = new Map<string, { data: any, timestamp: number }>();
+const CACHE_TTL = 1000 * 60 * 5; // 5 minutes cache
+
+const getCached = (key: string) => {
+  const entry = jotformCache.get(key);
+  if (entry && (Date.now() - entry.timestamp) < CACHE_TTL) return entry.data;
+  return null;
+};
+
+const setCached = (key: string, data: any) => {
+  jotformCache.set(key, { data, timestamp: Date.now() });
+};
+
 // Jotform Proxy Routes (Local Dev Only - Vercel use api/*.ts)
 router.get('/jotform-forms', async (req, res) => {
   try {
     const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!apiKey) return res.json({ content: [] });
     
+    const cacheKey = `forms_${apiKey}`;
+    const cached = getCached(cacheKey);
+    if (cached && !req.query.t) return res.json(cached);
+
     let response;
     try {
       response = await axios.get('https://eu-api.jotform.com/user/forms', { params: { apiKey, limit: 100 } });
     } catch (e) {
       response = await axios.get('https://api.jotform.com/user/forms', { params: { apiKey, limit: 100 } });
     }
+    setCached(cacheKey, response.data);
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch forms' });
@@ -32,10 +51,14 @@ router.get('/jotform-forms', async (req, res) => {
 
 router.get('/jotform-submissions', async (req, res) => {
   try {
-    const { formId, filter, offset, limit } = req.query;
+    const { formId, filter, offset, limit, t } = req.query;
     const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
     
+    const cacheKey = `subs_${formId}_${offset}_${limit}_${apiKey}`;
+    const cached = getCached(cacheKey);
+    if (cached && !t) return res.json(cached);
+
     const params: any = { apiKey, limit: limit || 2000 };
     if (filter) params.filter = filter;
     if (offset) params.offset = offset;
@@ -46,6 +69,7 @@ router.get('/jotform-submissions', async (req, res) => {
     } catch (e) {
       response = await axios.get(`https://api.jotform.com/form/${formId}/submissions`, { params });
     }
+    setCached(cacheKey, response.data);
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch submissions' });

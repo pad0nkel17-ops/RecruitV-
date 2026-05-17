@@ -290,6 +290,7 @@ export const firebaseService = {
           formId,
           status: status || 'WAITING FOR RECRUITMENT',
           notes: notes || '',
+          createdAt: now,
           updatedAt: now,
           statusUpdatedAt: now,
           contactStartedOn: null,
@@ -332,6 +333,7 @@ export const firebaseService = {
           status: 'WAITING FOR RECRUITMENT',
           notes: '',
           contactStartedOn: contactType,
+          createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         });
       } else {

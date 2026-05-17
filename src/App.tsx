@@ -1233,10 +1233,6 @@ export default function App() {
       // 1. Index all Firebase items as base
       const LIMIT_DATE = new Date('2025-08-01').getTime();
       fbData.forEach(d => {
-        const itemDate = new Date((d as any).createdAt || d.updatedAt || 0).getTime();
-        if (itemDate < LIMIT_DATE) return; // Skip old records
-
-        const sId = String(d.id);
         const fields = d.fields || {};
         const getFVal = (keys: string[]) => {
           const foundKey = Object.keys(fields).find(k => 
@@ -1245,6 +1241,12 @@ export default function App() {
           return foundKey ? fields[foundKey] : '';
         };
 
+        const fbCreated = (d as any).createdAt || getFVal(['created_at', 'submission_date', 'date']) || d.updatedAt || new Date().toISOString();
+        const itemDate = new Date(fbCreated).getTime();
+        if (itemDate < LIMIT_DATE) return; // Skip old records
+
+        const sId = String(d.id);
+        
         const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || getFVal(['telegram', 'tg', 'contact'])).toString().toLowerCase().trim();
         const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || getFVal(['discord', 'ds'])).toString().toLowerCase().trim();
         const em = (d.email || d.fields?.Email || getFVal(['email', 'mail'])).toString().toLowerCase().trim();
@@ -1261,7 +1263,7 @@ export default function App() {
 
         mergedMap.set(sId, enhanceBooster({
           id: sId,
-          createdAt: (d as any).createdAt || d.updatedAt || new Date().toISOString(),
+          createdAt: fbCreated,
           telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
           discord: d.discord || getFVal(['discord', 'ds']),
           email: d.email || getFVal(['email', 'mail']),

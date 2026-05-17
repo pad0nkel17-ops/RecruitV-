@@ -1,5 +1,6 @@
 import { initializeApp, type FirebaseOptions } from 'firebase/app';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 
 // Default empty config to prevent build crash
 let firebaseConfig: FirebaseOptions & { firestoreDatabaseId?: string } = {
@@ -28,6 +29,7 @@ try {
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth(app);
 
 // Access control is now managed via app-level env variable VITE_ACCESS_KEY
 

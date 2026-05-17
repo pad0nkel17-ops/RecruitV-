@@ -36,7 +36,7 @@ router.get('/jotform-submissions', async (req, res) => {
     const apiKey = req.headers['x-jotform-api-key']?.toString() || process.env.JOTFORM_API_KEY;
     if (!formId || !apiKey) return res.status(400).json({ error: 'Data missing' });
     
-    const params: any = { apiKey, limit: limit || 1000 };
+    const params: any = { apiKey, limit: limit || 2000 };
     if (filter) params.filter = filter;
     if (offset) params.offset = offset;
 

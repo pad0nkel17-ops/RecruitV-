@@ -15,6 +15,7 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  Archive,
   RefreshCw,
   AlertCircle,
   Eye,
@@ -87,6 +88,7 @@ interface Booster {
   formTitle?: string;
   fastSearchContent?: string;
   deepSearchContent?: string;
+  isArchived?: boolean;
 }
 
 const CellContent = ({ val, col }: { val: any, col: string }) => {
@@ -582,6 +584,8 @@ export default function App() {
   const [lastSyncBatchId, setLastSyncBatchId] = useState<string | undefined>();
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
+  const [archiveConfirmationId, setArchiveConfirmationId] = useState<string | null>(null);
+  const [isBulkArchiveConfirming, setIsBulkArchiveConfirming] = useState(false);
 
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -610,6 +614,8 @@ export default function App() {
   useEffect(() => {
     const handleClickOutside = () => {
       setStatusPickerAnchor(null);
+      setArchiveConfirmationId(null);
+      setIsBulkArchiveConfirming(false);
     };
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
@@ -695,11 +701,9 @@ export default function App() {
     }
 
     const now = new Date();
-    // Start of last month as a sensible default if none saved
-    const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     
     return {
-      start: startOfPrevMonth.toISOString().split('T')[0],
+      start: '',
       end: currentDay
     };
   });
@@ -1117,8 +1121,17 @@ export default function App() {
       // Hardcoded fallbacks if Jotform returns nothing but we want to provide something
       const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
       
-      const mergedSet = new Set([...options, ...availableGames, ...hardcodedFallbacks]);
-      const finalGames = Array.from(mergedSet).filter(Boolean).sort((a, b) => a.localeCompare(b));
+      const gamesMap = new Map<string, string>();
+      [...options, ...availableGames, ...hardcodedFallbacks].forEach(game => {
+        const trimmed = game?.trim();
+        if (trimmed) {
+          const lower = trimmed.toLowerCase();
+          if (!gamesMap.has(lower)) {
+            gamesMap.set(lower, trimmed);
+          }
+        }
+      });
+      const finalGames = Array.from(gamesMap.values()).sort((a, b) => a.localeCompare(b));
       
       setAvailableGames(finalGames);
       
@@ -1149,13 +1162,22 @@ export default function App() {
           const headers: any = {};
           if (jotformKey) headers['x-jotform-api-key'] = jotformKey;
 
-          const jfResp = await axios.get('/api/jotform-submissions', { 
-            params: { formId: idToFetch },
-            headers
-          });
-          jotformSubs = (jfResp.data.content || []).filter((sub: any) => {
+          let allSubs: any[] = [];
+          // Fetch up to 4 pages to get at least 4000 records if they exist
+          for (let offset = 0; offset < 4000; offset += 1000) {
+            const jfResp = await axios.get('/api/jotform-submissions', { 
+              params: { formId: idToFetch, limit: 1000, offset },
+              headers
+            });
+            const batch = jfResp.data.content || [];
+            if (batch.length === 0) break;
+            allSubs = [...allSubs, ...batch];
+            if (batch.length < 1000) break;
+          }
+
+          jotformSubs = allSubs.filter((sub: any) => {
             const subDate = new Date(sub.created_at);
-            return subDate.getFullYear() >= 2026;
+            return subDate >= new Date('2025-08-01');
           });
         } catch (e) {
           console.error('Failed to fetch Jotform submissions');
@@ -1163,7 +1185,10 @@ export default function App() {
       }
 
       // 2. Fetch Firebase booster_data
-      fbData = await firebaseService.getBoosterData(idToFetch);
+      let fetchFilter: 'ACTIVE' | 'ARCHIVED' | 'ALL' = 'ACTIVE';
+      if (activeTab === 'ARCHIVED') fetchFilter = 'ARCHIVED';
+      
+      fbData = await firebaseService.getBoosterData(idToFetch, fetchFilter);
 
       // 3. Merge
       let merged: Booster[] = [];
@@ -1196,6 +1221,7 @@ export default function App() {
             notes: d.notes,
             formId: d.formId,
             fields: fields,
+            isArchived: d.isArchived || false,
           });
         });
       } else {
@@ -1245,6 +1271,7 @@ export default function App() {
             notes: persist?.notes || '',
             formId: idToFetch,
             fields: dynamicFields,
+            isArchived: persist?.isArchived || false,
           });
         });
       }
@@ -1413,6 +1440,32 @@ export default function App() {
     } catch (err) {
       console.error('Failed to restore form');
       fetchForms(); // Revert on error
+    }
+  };
+
+  const toggleArchive = async (id: string, isArchived: boolean) => {
+    try {
+      await firebaseService.archiveBooster(id, isArchived);
+      setBoosters(prev => prev.map(b => b.id === id ? { ...b, isArchived } : b));
+      setNotification({ message: isArchived ? 'Application archived' : 'Application restored', type: 'SUCCESS' });
+    } catch (err) {
+      setNotification({ message: 'Failed to update archive status', type: 'ERROR' });
+    }
+  };
+
+  const handleBulkArchive = async (isArchived: boolean) => {
+    if (selectedBoosterIds.size === 0) return;
+    const ids = Array.from(selectedBoosterIds);
+    setRefreshing(true);
+    try {
+      await Promise.all(ids.map((id: string) => firebaseService.archiveBooster(id, isArchived)));
+      setBoosters(prev => prev.map(b => (ids as string[]).includes(b.id) ? { ...b, isArchived } : b));
+      setSelectedBoosterIds(new Set());
+      setNotification({ message: `${ids.length} applications ${isArchived ? 'archived' : 'restored'}`, type: 'SUCCESS' });
+    } catch (err) {
+      setNotification({ message: 'Failed to bulk archive', type: 'ERROR' });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -1674,6 +1727,29 @@ Added to MasterFile`;
               return (
                 <>
                   <div className="mb-1 flex items-center gap-2">
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (archiveConfirmationId === booster.id) {
+                          toggleArchive(booster.id, !booster.isArchived);
+                          setArchiveConfirmationId(null);
+                        } else {
+                          setArchiveConfirmationId(booster.id);
+                        }
+                      }}
+                      className={cn(
+                        "p-1.5 rounded-lg transition-all border shrink-0",
+                        archiveConfirmationId === booster.id
+                          ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
+                          : booster.isArchived
+                            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+                            : "bg-white/5 border-white/10 text-white/20 hover:text-rose-400 hover:bg-rose-400/10 hover:border-rose-400/30"
+                      )}
+                      title={archiveConfirmationId === booster.id ? "Click again to confirm" : (booster.isArchived ? "Restore from Archive" : "Move to Archive")}
+                    >
+                      {archiveConfirmationId === booster.id ? <AlertCircle className="w-3 h-3" /> : (booster.isArchived ? <RefreshCw className="w-3 h-3" /> : <Archive className="w-3 h-3" />)}
+                    </button>
+
                     <button
                       onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
                       className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
@@ -2028,6 +2104,10 @@ Added to MasterFile`;
     if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
       return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
     }
+    
+    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'WAITING FOR RECRUITMENT' && !dateRange.start && !dateRange.end) {
+      return [...boosters].filter(b => b.status === 'WAITING FOR RECRUITMENT' && !b.isArchived).sort((a, b) => b.createdSortTime - a.createdSortTime);
+    }
 
     const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
     const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
@@ -2043,8 +2123,13 @@ Added to MasterFile`;
     }
 
     return boosters.filter(b => {
-      // 1. Cheap checks first: Tab and Game Filter
-      if (activeTab !== 'ALL' && b.status !== activeTab) return false;
+      // 1. Cheap checks first: Archive, Tab and Game Filter
+      if (activeTab === 'ARCHIVED') {
+        if (!b.isArchived) return false;
+      } else {
+        if (b.isArchived) return false;
+        if (activeTab !== 'ALL' && b.status !== activeTab) return false;
+      }
       
       const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
       if (!matchesGameFilter) return false;
@@ -2080,26 +2165,47 @@ Added to MasterFile`;
       }
       
       return true;
-    }).sort((a, b) => b.statusSortTime - a.statusSortTime);
+    }).sort((a, b) => {
+      if (activeTab === 'WAITING FOR RECRUITMENT') {
+        return b.createdSortTime - a.createdSortTime;
+      }
+      return b.statusSortTime - a.statusSortTime;
+    });
   }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange]);
 
   const allGames = useMemo(() => {
-    const games = new Set<string>();
+    const gamesMap = new Map<string, string>();
     boosters.forEach(b => {
       if (b.games) {
         b.games.split(/[,;|]+/).forEach(g => {
           const trimmed = g.trim();
-          if (trimmed) games.add(trimmed);
+          if (trimmed) {
+            const lower = trimmed.toLowerCase();
+            if (!gamesMap.has(lower)) {
+              gamesMap.set(lower, trimmed);
+            }
+          }
         });
       }
     });
-    return Array.from(games).sort();
+    return Array.from(gamesMap.values()).sort();
   }, [boosters]);
 
   const mergedAvailableGames = useMemo(() => {
     const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
-    const merged = new Set([...availableGames, ...allGames, ...hardcodedFallbacks]);
-    return Array.from(merged).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const gamesMap = new Map<string, string>();
+    
+    [...availableGames, ...allGames, ...hardcodedFallbacks].forEach(game => {
+      const trimmed = game?.trim();
+      if (trimmed) {
+        const lower = trimmed.toLowerCase();
+        if (!gamesMap.has(lower)) {
+          gamesMap.set(lower, trimmed);
+        }
+      }
+    });
+
+    return Array.from(gamesMap.values()).sort((a, b) => a.localeCompare(b));
   }, [availableGames, allGames]);
 
   const sidebarGroups = [
@@ -2112,6 +2218,12 @@ Added to MasterFile`;
           value: key,
           icon: cfg.icon
         }))
+      ]
+    },
+    {
+      label: 'Archive',
+      items: [
+        { label: 'Archive', value: 'ARCHIVED', icon: Archive }
       ]
     }
   ];
@@ -2907,7 +3019,7 @@ Added to MasterFile`;
                            </div>
                            <div>
                               <p className="text-[12px] text-white font-black uppercase tracking-widest">Commit Live Pool</p>
-                              <p className="text-[10px] text-white/40 italic">Save current Jotform submissions (2026+) to database</p>
+                              <p className="text-[10px] text-white/40 italic">Save current Jotform submissions (Aug 2025+) to database</p>
                            </div>
                         </div>
 
@@ -2935,7 +3047,7 @@ Added to MasterFile`;
                               try {
                                 const headers = { 'x-jotform-api-key': jotformKey };
                                 let allContent: any[] = [];
-                                for (let offset = 0; offset < 4000; offset += 1000) {
+                                for (let offset = 0; offset < 20000; offset += 1000) {
                                   const resp = await axios.get('/api/jotform-submissions', { 
                                     params: { formId: selectedForm, limit: 1000, offset },
                                     headers
@@ -2947,7 +3059,7 @@ Added to MasterFile`;
                                 }
                                 
                                 const content = allContent.filter((sub: any) => {
-                                  return new Date(sub.created_at).getFullYear() >= 2026;
+                                  return new Date(sub.created_at) >= new Date('2025-08-01');
                                 });
                                 
                                 setSyncProgress({ current: 0, total: content.length });
@@ -3061,6 +3173,39 @@ Added to MasterFile`;
                           </div>
                         </div>
 
+                         <div className="grid grid-cols-5 gap-1.5">
+                           <button 
+                             onClick={() => setSyncHistoryRange({ start: '2025-08-01', end: '2025-08-31' })}
+                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
+                           >
+                             Aug 25
+                           </button>
+                           <button 
+                             onClick={() => setSyncHistoryRange({ start: '2025-09-01', end: '2025-09-30' })}
+                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
+                           >
+                             Sep 25
+                           </button>
+                           <button 
+                             onClick={() => setSyncHistoryRange({ start: '2025-10-01', end: '2025-10-31' })}
+                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
+                           >
+                             Oct 25
+                           </button>
+                           <button 
+                             onClick={() => setSyncHistoryRange({ start: '2025-11-01', end: '2025-11-30' })}
+                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
+                           >
+                             Nov 25
+                           </button>
+                           <button 
+                             onClick={() => setSyncHistoryRange({ start: '2025-12-01', end: '2025-12-31' })}
+                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
+                           >
+                             Dec 25
+                           </button>
+                        </div>
+
                         {isSyncingHistorical ? (
                           <div className="space-y-3 pt-2">
                             <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
@@ -3090,7 +3235,7 @@ Added to MasterFile`;
                                 
                                 const headers = { 'x-jotform-api-key': jotformKey };
                                 let allContent: any[] = [];
-                                for (let offset = 0; offset < 4000; offset += 1000) {
+                                for (let offset = 0; offset < 20000; offset += 1000) {
                                   const resp = await axios.get('/api/jotform-submissions', { 
                                     params: { formId: selectedForm, filter, limit: 1000, offset },
                                     headers
@@ -3386,13 +3531,47 @@ Added to MasterFile`;
                   <Copy className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
                   Clean Pool
                 </button>
+                {selectedBoosterIds.size > 0 && (
+                   <div className="flex items-center gap-2 pl-4 ml-4 border-l border-white/10 animate-in fade-in slide-in-from-left-4">
+                      <span className="text-[10px] text-white/40 font-bold uppercase tracking-widest">{selectedBoosterIds.size} Selected</span>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isBulkArchiveConfirming) {
+                            handleBulkArchive(activeTab !== 'ARCHIVED');
+                            setIsBulkArchiveConfirming(false);
+                          } else {
+                            setIsBulkArchiveConfirming(true);
+                          }
+                        }}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm border",
+                          isBulkArchiveConfirming
+                            ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
+                            : "bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20"
+                        )}
+                      >
+                        {isBulkArchiveConfirming ? <AlertCircle className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
+                        {isBulkArchiveConfirming 
+                          ? "Confirm Bulk Update?" 
+                          : (activeTab === 'ARCHIVED' ? 'Restore Selected' : 'Archive Selected')
+                        }
+                      </button>
+                      <button 
+                        onClick={() => setSelectedBoosterIds(new Set())}
+                        className="p-1.5 rounded-full hover:bg-white/5 text-white/40 hover:text-white transition-all"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                   </div>
+                )}
               </div>
             </div>
           </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 bg-[#141416] border border-[#2D2D30] rounded-xl px-3 py-1.5 shadow-inner">
                 <span className="text-[9px] text-white/40 uppercase font-bold tracking-wider">Show:</span>
-                {[10, 50, 0].map(size => (
+                {[10, 50, 100, 250, 500, 1000, 2000, 0].map(size => (
                   <button
                     key={size}
                     onClick={() => setPageSize(size)}

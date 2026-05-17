@@ -1166,7 +1166,7 @@ export default function App() {
           jotformSubs = allSubs.filter((sub: any) => {
             const subDate = new Date(sub.created_at);
             return subDate >= new Date('2025-08-01');
-          });
+          }).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
         } catch (e) {
           console.error('Failed to fetch Jotform submissions');
         }
@@ -1177,6 +1177,22 @@ export default function App() {
       fbData = await firebaseService.getBoosterData(idToFetch, 'ALL');
 
       // 3. Merge
+      const idMap = new Map<string, BoosterData>();
+      const tgMap = new Map<string, BoosterData>();
+      const dsMap = new Map<string, BoosterData>();
+      const emailMap = new Map<string, BoosterData>();
+
+      fbData.forEach(d => {
+        idMap.set(String(d.id), d);
+        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || '').toString().toLowerCase().trim();
+        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || '').toString().toLowerCase().trim();
+        const em = (d.email || d.fields?.Email || '').toString().toLowerCase().trim();
+        
+        if (tg && tg !== '—' && tg.length > 2) tgMap.set(tg, d);
+        if (ds && ds !== '—' && ds.length > 2) dsMap.set(ds, d);
+        if (em && em.includes('@')) emailMap.set(em, d);
+      });
+
       let merged: Booster[] = [];
 
       if (idToFetch.startsWith('local_')) {
@@ -1212,9 +1228,10 @@ export default function App() {
         });
       } else {
         // Merge Jotform with Firebase
+        const seenInThisFetch = new Set<string>(); // contact set
+
         merged = jotformSubs.map((sub: any) => {
           const sId = String(sub.id);
-          const persist = fbData.find(d => String(d.id) === sId);
           const answers = sub.answers || {};
           
           const formatAnswer = (ans: any) => {
@@ -1228,17 +1245,49 @@ export default function App() {
           const dynamicFields: Record<string, string> = {};
           Object.values(answers).forEach((a: any) => {
             if (a.text && a.answer !== undefined) {
-               dynamicFields[a.text] = persist?.fieldOverrides?.[a.text] !== undefined 
-                ? persist.fieldOverrides[a.text] 
-                : formatAnswer(a.answer);
+               dynamicFields[a.text] = formatAnswer(a.answer);
             }
           });
 
           const getVal = (label: string) => {
-              if (persist?.fieldOverrides?.[label] !== undefined) return persist.fieldOverrides[label];
               const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
               return entry ? formatAnswer(entry.answer) : '';
           };
+
+          const tg = (getVal('Telegram') || getVal('Contact')).toLowerCase().trim();
+          const ds = (getVal('Discord')).toLowerCase().trim();
+          const em = (getVal('email') || getVal('mail')).toLowerCase().trim();
+          const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
+                             (ds && ds !== '—' && ds.length > 2) ? ds : 
+                             (em && em.includes('@')) ? em : '';
+
+          // 1. Direct ID lookup
+          let persist = idMap.get(sId);
+          
+          // 2. Contact-based lookup if not found by ID (look across all firebase records for this form)
+          if (!persist && contactKey) {
+            persist = tgMap.get(contactKey) || dsMap.get(contactKey) || emailMap.get(contactKey);
+          }
+
+          // 3. Status determination
+          let calculatedStatus = (persist?.status || 'WAITING FOR RECRUITMENT') as any;
+          
+          // If this submission is NOT the one tracked in Firebase, it's a duplication
+          if (persist && String(persist.id) !== sId) {
+             calculatedStatus = 'DUPLICATION';
+          } else if (contactKey && seenInThisFetch.has(contactKey)) {
+             // If we already saw this person in this form during this fetch loop
+             calculatedStatus = 'DUPLICATION';
+          }
+
+          if (contactKey) seenInThisFetch.add(contactKey);
+
+          // Apply field overrides from persist
+          if (persist?.fieldOverrides) {
+            Object.entries(persist.fieldOverrides).forEach(([k, v]) => {
+              if (k !== 'crmAccount') dynamicFields[k] = v;
+            });
+          }
 
           return enhanceBooster({
             id: sId,
@@ -1249,7 +1298,7 @@ export default function App() {
             games: getVal('game') || getVal('What games'),
             workingHours: getVal('How long') || getVal('Working hours'),
             region: getVal('region'),
-            status: (persist?.status || 'WAITING FOR RECRUITMENT') as any,
+            status: calculatedStatus,
             statusUpdatedAt: persist?.statusUpdatedAt || persist?.updatedAt || sub.created_at,
             statusHistory: persist?.statusHistory || [],
             crmAccount: persist?.crmAccount || persist?.fieldOverrides?.['crmAccount'] || '',

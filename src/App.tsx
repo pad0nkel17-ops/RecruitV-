@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue, memo } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { 
@@ -42,7 +42,8 @@ import {
   Zap,
   PlusCircle,
   Maximize2,
-  Mail
+  Mail,
+  StickyNote
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -87,8 +88,8 @@ interface Booster {
   fields: Record<string, string>;
   formTitle?: string;
   fastSearchContent?: string;
-  deepSearchContent?: string;
   isArchived?: boolean;
+  updatedAt: string;
 }
 
 const CellContent = ({ val, col }: { val: any, col: string }) => {
@@ -153,17 +154,66 @@ const computeDeepSearchContent = (b: any): string => {
   return parts.join(' ').toLowerCase();
 };
 
-const pickEarliestDate = (...dates: any[]) => {
-  const validDates = dates
-    .map(d => (typeof d === 'string' || typeof d === 'number') ? new Date(d) : d)
-    .filter(d => d instanceof Date && !isNaN(d.getTime()) && d.getTime() > 1000000000) // Filter out very old/unix start
-    .map(d => d.getTime());
+const pickApplicationDate = (submissionDate: any, ...otherDates: any[]) => {
+  const maxDate = new Date();
+  maxDate.setDate(maxDate.getDate() + 1); // Allow 1 day future for timezone safety
+
+  const parse = (d: any) => {
+    if (!d) return null;
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return null;
+    if (date.getTime() < 1000000000) return null; // Filter out dates before 1970
+    if (date.getTime() > maxDate.getTime()) return null; // Filter out future dates
+    return date;
+  };
+
+  // 1. Try submission dates first (most reliable)
+  const subDate = parse(submissionDate);
+  if (subDate) return subDate.toISOString();
+
+  // 2. Try other dates (like fields from form answers)
+  const validOthers = otherDates.map(parse).filter(Boolean) as Date[];
+  if (validOthers.length === 0) return new Date().toISOString();
   
-  if (validDates.length === 0) return new Date().toISOString();
-  return new Date(Math.min(...validDates)).toISOString();
+  // Pick the earliest valid date found
+  return new Date(Math.min(...validOthers.map(d => d.getTime()))).toISOString();
 };
 
 const enhanceBooster = (b: any): Booster => {
+  const fields = b.fields || {};
+  const getFVal = (keys: string[]) => {
+    const foundKey = Object.keys(fields).find(k => 
+      keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
+    );
+    const val = foundKey ? fields[foundKey] : '';
+    return (val && val !== '—') ? String(val).trim() : '';
+  };
+
+  let telegram = String(b.telegram || '').trim();
+  if (!telegram || telegram === '—') {
+    telegram = getFVal(['telegram', 'tg', 'user', 'contact', 'handle']);
+  }
+  
+  let discord = String(b.discord || '').trim();
+  if (!discord || discord === '—') {
+    discord = getFVal(['discord', 'ds', 'user', 'contact', 'handle']);
+  }
+  
+  let email = String(b.email || '').trim();
+  if (!email || email === '—') {
+    email = getFVal(['email', 'mail']);
+  }
+  
+  // Clean up identities (remove @)
+  if (telegram.startsWith('@')) telegram = telegram.substring(1);
+  if (discord.startsWith('@')) discord = discord.substring(1);
+
+  // Sync back to fields if name is missing
+  if (!fields['Name/Contact']) {
+    const fallbackName = fields['Full name'] || fields['Name'] || fields['Contact Name'] || fields['Identity'] || getFVal(['name', 'contact']);
+    if (fallbackName && fallbackName !== '—') fields['Name/Contact'] = String(fallbackName);
+  }
+
   const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt || new Date().toISOString();
 
   const parseTime = (dateStr: any) => {
@@ -176,11 +226,14 @@ const enhanceBooster = (b: any): Booster => {
 
   return {
     ...b,
+    telegram,
+    discord,
+    email,
+    fields,
     statusUpdatedAt,
     statusSortTime,
     createdSortTime,
-    fastSearchContent: computeFastSearchContent(b),
-    deepSearchContent: computeDeepSearchContent(b)
+    fastSearchContent: computeFastSearchContent({ ...b, telegram, discord, email })
   };
 };
 
@@ -567,6 +620,247 @@ interface DbSummary {
   total: number;
 }
 
+const BoosterRow = memo(({ 
+  booster, 
+  isSelected, 
+  level, 
+  statusConfig, 
+  activeTab,
+  dynamicColumns,
+  archiveConfirmationId,
+  copiedId,
+  onToggleSelection,
+  onToggleArchive,
+  onSetArchiveConfirm,
+  onView,
+  onEditCell,
+  onUpdateContactStart,
+  onUpdateStatus,
+  onCopyMaster,
+  onMarkChecked
+}: { 
+  booster: Booster;
+  isSelected: boolean;
+  level: string | null;
+  statusConfig: any;
+  activeTab: string;
+  dynamicColumns: string[];
+  archiveConfirmationId: string | null;
+  copiedId: string | null;
+  onToggleSelection: (id: string) => void;
+  onToggleArchive: (id: string, isArchived: boolean) => void;
+  onSetArchiveConfirm: (id: string | null) => void;
+  onView: (b: Booster) => void;
+  onEditCell: (cell: { id: string; field: string; value: string }) => void;
+  onUpdateContactStart: (id: string, type: 'TELEGRAM' | 'DISCORD' | 'EMAIL' | null) => void;
+  onUpdateStatus: (id: string, status: any) => void;
+  onCopyMaster: (b: Booster) => void;
+  onMarkChecked: (id: string) => void;
+}) => {
+  const rawName = booster.fields?.['Name/Contact'] || booster.fields?.['Name'] || '';
+  const tg = booster.telegram || '';
+  const ds = booster.discord || '';
+  const em = booster.email || '';
+
+  return (
+    <tr className={cn(
+      "group hover:bg-white/[0.02] transition-colors relative",
+      isSelected && "bg-[#D4AF37]/5"
+    )}>
+      <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
+        <div 
+          onClick={() => onToggleSelection(booster.id)}
+          className={cn(
+            "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+            isSelected 
+              ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
+              : "border-white/10 group-hover:border-[#D4AF37]/40"
+          )}
+        >
+          {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+        </div>
+      </td>
+      
+      {/* Identity Cell */}
+      <td className="px-3 py-2 border-b border-white/5">
+        <div className="flex flex-col gap-1.5 min-w-[170px]">
+          <div className="mb-1 flex items-center gap-2">
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                if (archiveConfirmationId === booster.id) {
+                  onToggleArchive(booster.id, !booster.isArchived);
+                  onSetArchiveConfirm(null);
+                } else {
+                  onSetArchiveConfirm(booster.id);
+                }
+              }}
+              className={cn(
+                "p-1.5 rounded-lg transition-all border shrink-0",
+                archiveConfirmationId === booster.id
+                  ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
+                  : booster.isArchived
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]"
+                    : "bg-white/5 border-white/10 text-white/20 hover:text-rose-400 hover:bg-rose-400/10 hover:border-rose-400/30"
+              )}
+              title={archiveConfirmationId === booster.id ? "Click again to confirm" : (booster.isArchived ? "Restore from Archive" : "Move to Archive")}
+            >
+              {archiveConfirmationId === booster.id ? <AlertCircle className="w-3 h-3" /> : (booster.isArchived ? <RefreshCw className="w-3 h-3" /> : <Archive className="w-3 h-3" />)}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onView(booster); }}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
+            >
+              <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
+              View
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditCell({ id: booster.id, field: 'Name/Contact', value: rawName });
+              }}
+              className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/10 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all active:scale-95"
+              title="Edit Real Name"
+            >
+               <Edit2 className="w-2 h-2" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
+              <span className="text-white/20 font-light select-none">:</span>
+              {level ? (
+                <div className={cn(
+                  "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
+                  level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
+                )}>
+                  {level}
+                </div>
+              ) : (
+                <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
+              )}
+              {booster.status === 'DUPLICATION' && (
+                <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
+                  <Copy className="w-2.5 h-2.5" />
+                  Duplicate
+                </div>
+              )}
+            </div>
+            <span className="text-white/20 font-light select-none">:</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {tg && (
+                <div className="flex flex-col items-center gap-1">
+                  <div 
+                    className={cn(
+                      "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden text-blue-400",
+                      booster.contactStartedOn === 'TELEGRAM' ? "bg-blue-500/20 border-blue-500/60" : "bg-blue-500/10 border-blue-500/40"
+                    )}
+                    onClick={() => navigator.clipboard.writeText(tg)}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span className="text-[13px] font-bold font-mono">{tg}</span>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all", booster.contactStartedOn === 'TELEGRAM' ? "bg-blue-500 border-blue-400 text-white" : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400")}><Check className="w-3 h-3" /></button>
+                </div>
+              )}
+              {ds && (
+                <div className="flex flex-col items-center gap-1">
+                  <div 
+                    className={cn(
+                      "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden text-indigo-400",
+                      booster.contactStartedOn === 'DISCORD' ? "bg-indigo-500/20 border-indigo-500/60" : "bg-indigo-500/10 border-indigo-500/40"
+                    )}
+                    onClick={() => navigator.clipboard.writeText(ds)}
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span className="text-[13px] font-bold font-mono">{ds}</span>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all", booster.contactStartedOn === 'DISCORD' ? "bg-indigo-500 border-indigo-400 text-white" : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400")}><Check className="w-3 h-3" /></button>
+                </div>
+              )}
+              {em && (
+                <div className="flex flex-col items-center gap-1">
+                  <div 
+                    className={cn(
+                      "w-10 h-10 rounded-full border flex items-center justify-center cursor-pointer transition-all shadow-md relative overflow-hidden text-emerald-400 group/mail",
+                      booster.contactStartedOn === 'EMAIL' ? "bg-emerald-500/20 border-emerald-500/60" : "bg-emerald-500/10 border-emerald-500/40"
+                    )}
+                    onClick={() => navigator.clipboard.writeText(em)}
+                  >
+                    <Mail className="w-4 h-4" />
+                    <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-[#D4AF37] text-black text-[8px] font-black px-1.5 py-0.5 rounded opacity-0 group-hover/mail:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">COPY MAIL</span>
+                  </div>
+                  <span className="text-[8px] font-black uppercase text-white/30 tracking-widest mt-[-2px]">Mail</span>
+                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'EMAIL' ? null : 'EMAIL'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all mt-1", booster.contactStartedOn === 'EMAIL' ? "bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]" : "bg-white/5 border-white/10 text-white/20 hover:text-emerald-400")}><Check className="w-3 h-3" /></button>
+                </div>
+              )}
+              {!tg && !ds && !em && !rawName && (
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[12px] text-white/30 italic">No Identity</span>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditCell({ id: booster.id, field: 'telegram', value: '' });
+                    }}
+                    className="text-[9px] uppercase font-black text-[#D4AF37]/60 hover:text-[#D4AF37] flex items-center gap-1"
+                  >
+                    <PlusCircle className="w-2.5 h-2.5" />
+                    Add Contact
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </td>
+
+      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games" onClick={() => onEditCell({ id: booster.id, field: 'games', value: booster.games || '' })}>
+        <div className="flex items-center justify-between gap-1"><CellContent val={booster.games} col="Games" /><Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37]" /></div>
+      </td>
+
+      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/status" onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); onEditCell({ id: booster.id, field: 'STATUS_PICKER', value: JSON.stringify(rect) }); }}>
+        <div className="flex flex-col gap-1.5 relative"><div className="flex items-center justify-between gap-2"><div className={cn("px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border shadow-sm", statusConfig?.color)}>{statusConfig?.funnelLabel || booster.status}</div><Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37]" /></div><StatusProgress booster={booster} onMarkChecked={onMarkChecked} /></div>
+      </td>
+
+      <td className="px-3 py-2 border-b border-white/5">
+        <div onClick={() => onEditCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })} className={cn("group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]", booster.crmAccount ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]" : "bg-white/5 border-white/10 text-white/20 hover:bg-[#D4AF37]/5 hover:border-[#D4AF37]/30")}>
+          <span className={cn("text-[12px] uppercase font-bold tracking-wider truncate", !booster.crmAccount && "italic font-normal text-[10px]")}>{booster.crmAccount || 'Not Assigned'}</span>
+          <div className="flex items-center gap-1.5 ml-2">{booster.crmAccount && <button onClick={(e) => { e.stopPropagation(); onCopyMaster({ ...booster, _target: 'crm' } as any); }} className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20"><Copy className="w-3 h-3 text-emerald-400" /></button>}<Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100" /></div>
+        </div>
+      </td>
+
+      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/region" onClick={() => onEditCell({ id: booster.id, field: 'region', value: booster.region || '' })}>
+        <div className="flex flex-col gap-0.5"><div className="flex items-center justify-between gap-1.5"><div className="flex items-center gap-1.5"><Globe className="w-2 h-2 text-[#D4AF37]/70" /><span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span></div><Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37]" /></div><span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span></div>
+      </td>
+
+      {dynamicColumns.map(col => {
+        const val = col === 'Status' ? booster.status : col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() : (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
+        return (
+          <td key={col} className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/dynamic" onClick={() => onEditCell({ id: booster.id, field: col, value: val || '' })}>
+            <div className="flex items-center justify-between gap-2"><CellContent val={val} col={col} /><Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] shrink-0" /></div>
+          </td>
+        );
+      })}
+
+      <td className="px-3 py-2 border-b border-white/5 text-right">
+        <div className="flex items-center justify-end gap-2">
+           <button onClick={() => onUpdateStatus(booster.id, 'WAITING FOR RECRUITMENT')} className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all shadow-sm"><Zap className="w-4 h-4" /></button>
+          <button onClick={() => onEditCell({ id: booster.id, field: 'notes', value: booster.notes || '' })} className={cn("p-2.5 rounded-xl transition-all border shrink-0", booster.notes ? "bg-amber-500/10 border-amber-500/30 text-amber-500" : "bg-white/5 border-white/10 text-white/20 hover:text-amber-500")}><StickyNote className="w-4 h-4" /></button>
+        </div>
+      </td>
+    </tr>
+  );
+}, (prev, next) => {
+  return prev.booster.id === next.booster.id && 
+         prev.booster.updatedAt === next.booster.updatedAt &&
+         prev.isSelected === next.isSelected &&
+         prev.archiveConfirmationId === next.archiveConfirmationId &&
+         prev.copiedId === next.copiedId &&
+         prev.level === next.level &&
+         prev.activeTab === next.activeTab &&
+         prev.dynamicColumns.length === next.dynamicColumns.length;
+});
+
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [viewingBooster, setViewingBooster] = useState<Booster | null>(null);
@@ -581,6 +875,11 @@ export default function App() {
   const [editingFormTitle, setEditingFormTitle] = useState('');
   const [dbSummaries, setDbSummaries] = useState<Record<string, DbSummary>>({});
   const [search, setSearch] = useState('');
+  const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
+    const saved = localStorage.getItem('recruitment_date_range');
+    if (saved) return JSON.parse(saved);
+    return { start: '', end: '' };
+  });
   const [deepSearch, setDeepSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const deferredDeepSearch = useDeferredValue(deepSearch);
@@ -611,6 +910,9 @@ export default function App() {
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
   const [archiveConfirmationId, setArchiveConfirmationId] = useState<string | null>(null);
   const [isBulkArchiveConfirming, setIsBulkArchiveConfirming] = useState(false);
+  const [archivedStatusFilter, setArchivedStatusFilter] = useState<string | 'ALL'>('ALL');
+
+  const [improvedIds, setImprovedIds] = useState<string[]>([]);
 
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
@@ -620,6 +922,82 @@ export default function App() {
   const [selectedBoosterIds, setSelectedBoosterIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  const filteredBoosters = useMemo(() => {
+    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
+      return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
+    }
+    
+    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'WAITING FOR RECRUITMENT' && !dateRange.start && !dateRange.end) {
+      return [...boosters].filter(b => b.status === 'WAITING FOR RECRUITMENT' && !b.isArchived).sort((a, b) => b.createdSortTime - a.createdSortTime);
+    }
+
+    const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+    const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+
+    // Pre-calculate date filter boundaries if needed
+    let startBoundary = 0;
+    let endBoundary = Infinity;
+    if (dateRange.start) {
+      startBoundary = new Date(`${dateRange.start}T00:00:00+03:00`).getTime();
+    }
+    if (dateRange.end) {
+      endBoundary = new Date(`${dateRange.end}T23:59:59+03:00`).getTime();
+    }
+
+    return boosters.filter(b => {
+      // 1. Cheap checks first: Archive, Tab and Game Filter
+      if (activeTab === 'ARCHIVED') {
+        if (!b.isArchived) return false;
+        if (archivedStatusFilter !== 'ALL' && b.status !== archivedStatusFilter) return false;
+      } else {
+        if (b.isArchived) return false;
+        if (activeTab !== 'ALL' && b.status !== activeTab) return false;
+      }
+      
+      const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
+      if (!matchesGameFilter) return false;
+
+      // 2. Date checks - use pre-calculated timestamps
+      if (startBoundary > 0 || endBoundary < Infinity) {
+        if (b.createdSortTime < startBoundary || b.createdSortTime > endBoundary) return false;
+      }
+
+      // 3. Fast Search (Identity, IDs, Contacts)
+      if (searchTerms.length > 0) {
+        const matches = searchTerms.every(term => {
+          if (term.includes(':')) {
+            const parts = term.split(':');
+            const key = parts[0];
+            const val = parts.slice(1).join(':');
+            if (key === 'status') return b.status.toLowerCase().includes(val);
+            if (key === 'crm') return (b.crmAccount || '').toLowerCase().includes(val);
+            if (key === 'id') return b.id.toLowerCase().includes(val);
+            return b.fastSearchContent?.includes(term);
+          }
+          return b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
+      }
+
+      // 4. Deep Search
+      if (deepTerms.length > 0) {
+        const matches = deepTerms.every(term => {
+          const deepContent = computeDeepSearchContent(b);
+          return deepContent.includes(term) || b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
+      }
+      
+      return true;
+    }).sort((a, b) => {
+      if (activeTab === 'WAITING FOR RECRUITMENT') {
+        return b.createdSortTime - a.createdSortTime;
+      }
+      return b.statusSortTime - a.statusSortTime;
+    });
+  }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange, archivedStatusFilter]);
+
 
   useEffect(() => {
     localStorage.setItem('pageSize', pageSize.toString());
@@ -717,21 +1095,7 @@ export default function App() {
     return { urgent, stale, fresh };
   }, [boosters]);
 
-  const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
-    const currentDay = getGMT3DateString();
-    const savedStart = localStorage.getItem('booster_filter_start_date');
-    
-    if (savedStart) {
-      return { start: savedStart, end: currentDay };
-    }
 
-    const now = new Date();
-    
-    return {
-      start: '',
-      end: currentDay
-    };
-  });
 
   useEffect(() => {
     fetchForms();
@@ -1172,10 +1536,9 @@ export default function App() {
     }
   };
 
-  const [isArchiving, setIsArchiving] = useState(false);
   const [archivedLoaded, setArchivedLoaded] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
 
-  const [archivedStatusFilter, setArchivedStatusFilter] = useState<string | 'ALL'>('ALL');
 
   const fetchData = async (formIdTarget?: string, forceAll = false) => {
     const idToFetch = formIdTarget || selectedForm;
@@ -1272,7 +1635,7 @@ export default function App() {
           return foundKey ? fields[foundKey] : '';
         };
 
-        const fbCreated = pickEarliestDate(
+        const fbCreated = pickApplicationDate(
           (d as any).createdAt, 
           getFVal(['created_at', 'submission_date', 'date', 'form_date', 'posted']),
           d.updatedAt
@@ -1376,10 +1739,9 @@ export default function App() {
 
         const boosterObj = enhanceBooster({
           id: sId,
-          createdAt: pickEarliestDate(
-            sub.created_at, 
+          createdAt: pickApplicationDate(
+            sub.created_at || sub.submission_date, 
             sub.createdAt, 
-            sub.submission_date, 
             existing?.createdAt,
             getVal('Date'),
             getVal('Time')
@@ -1399,7 +1761,13 @@ export default function App() {
           formId: idToFetch,
           fields: dynamicFields,
           isArchived: existing?.isArchived || false,
+          updatedAt: existing?.updatedAt || new Date().toISOString(),
         });
+
+        // PERSIST NEW JOTFORM SUBS TO FIREBASE IMMEDIATELY
+        if (!existing) {
+           firebaseService.saveBoosterData(boosterObj as unknown as BoosterData).catch(err => console.error('Failed to auto-sync new Jotform sub:', err));
+        }
 
         mergedMap.set(sId, boosterObj);
       });
@@ -1921,471 +2289,6 @@ Added to MasterFile`;
 
     copyToClipboard(text, `master-${booster.id}`);
   };
-
-  const renderRowCells = (booster: Booster, level: string | null, statusConfig: any) => {
-    return (
-      <>
-        <td className="px-3 py-2 border-b border-white/5">
-          <div className="flex flex-col gap-1.5 min-w-[170px]">
-            {(() => {
-              const rawName = booster.fields?.['Name/Contact'] || '';
-              const tg = booster.telegram || '';
-              const ds = booster.discord || '';
-              const em = booster.email || '';
-              const showBigName = rawName && 
-                                  rawName.toLowerCase() !== tg.toLowerCase() && 
-                                  rawName.toLowerCase() !== ds.toLowerCase() &&
-                                  rawName.toLowerCase() !== em.toLowerCase();
-
-              return (
-                <>
-                  <div className="mb-1 flex items-center gap-2">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (archiveConfirmationId === booster.id) {
-                          toggleArchive(booster.id, !booster.isArchived);
-                          setArchiveConfirmationId(null);
-                        } else {
-                          setArchiveConfirmationId(booster.id);
-                        }
-                      }}
-                      className={cn(
-                        "p-1.5 rounded-lg transition-all border shrink-0",
-                        archiveConfirmationId === booster.id
-                          ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
-                          : booster.isArchived
-                            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]"
-                            : "bg-white/5 border-white/10 text-white/20 hover:text-rose-400 hover:bg-rose-400/10 hover:border-rose-400/30"
-                      )}
-                      title={archiveConfirmationId === booster.id ? "Click again to confirm" : (booster.isArchived ? "Restore from Archive" : "Move to Archive")}
-                    >
-                      {archiveConfirmationId === booster.id ? <AlertCircle className="w-3 h-3" /> : (booster.isArchived ? <RefreshCw className="w-3 h-3" /> : <Archive className="w-3 h-3" />)}
-                    </button>
-
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
-                    >
-                      <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
-                      View
-                    </button>
-                    {showBigName && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingCell({ id: booster.id, field: 'Name/Contact', value: rawName });
-                        }}
-                        className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all active:scale-95"
-                        title="Edit Real Name"
-                      >
-                         <Edit2 className="w-2 h-2" />
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
-                      <span className="text-white/20 font-light select-none">:</span>
-                      {level ? (
-                        <div className={cn(
-                          "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
-                          level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
-                        )}>
-                          {level}
-                        </div>
-                      ) : (
-                        <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
-                      )}
-                      {booster.status === 'DUPLICATION' && (
-                        <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
-                          <Copy className="w-2.5 h-2.5" />
-                          Duplicate
-                        </div>
-                      )}
-                    </div>
-                    
-                    <span className="text-white/20 font-light select-none">:</span>
-                    
-                    <div className="flex flex-wrap gap-2">
-                      {tg && (
-                        <div className="flex flex-col items-center gap-1">
-                          <div 
-                            className={cn(
-                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
-                              booster.contactStartedOn === 'TELEGRAM' 
-                                ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
-                                : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
-                            )}
-                            onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
-                          >
-                            <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
-                            <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingCell({ id: booster.id, field: 'telegram', value: tg });
-                              }}
-                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
-                            >
-                              <Edit2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM');
-                            }}
-                            className={cn(
-                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
-                              booster.contactStartedOn === 'TELEGRAM'
-                                ? "bg-blue-500 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]"
-                                : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10"
-                            )}
-                            title="Mark as Contacted via Telegram"
-                          >
-                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'TELEGRAM' ? "stroke-[4]" : "stroke-[2]")} />
-                          </button>
-                        </div>
-                      )}
-                      {ds && (
-                        <div className="flex flex-col items-center gap-1">
-                          <div 
-                            className={cn(
-                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
-                              booster.contactStartedOn === 'DISCORD'
-                                ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
-                                : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
-                            )}
-                            onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
-                          >
-                            <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
-                            <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingCell({ id: booster.id, field: 'discord', value: ds });
-                              }}
-                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
-                            >
-                              <Edit2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD');
-                            }}
-                            className={cn(
-                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
-                              booster.contactStartedOn === 'DISCORD'
-                                ? "bg-indigo-500 border-indigo-400 text-white shadow-[0_0_10px_rgba(99,102,241,0.5)]"
-                                : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/10"
-                            )}
-                            title="Mark as Contacted via Discord"
-                          >
-                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'DISCORD' ? "stroke-[4]" : "stroke-[2]")} />
-                          </button>
-                        </div>
-                      )}
-                      
-                      {em && (
-                        <div className="flex flex-col items-center gap-1 group/em-block">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateContactStart(booster.id, booster.contactStartedOn === 'EMAIL' ? null : 'EMAIL');
-                            }}
-                            className={cn(
-                              "flex flex-col items-center gap-1 transition-all",
-                              booster.contactStartedOn === 'EMAIL' ? "scale-105" : "hover:scale-105"
-                            )}
-                            title={booster.contactStartedOn === 'EMAIL' ? "Unmark Email Sent" : "Mark as Email Sent"}
-                          >
-                             <div className={cn(
-                               "w-8 h-8 rounded-xl border flex items-center justify-center transition-all shadow-md relative group/mail-icon",
-                               booster.contactStartedOn === 'EMAIL'
-                                 ? "bg-emerald-500 border-emerald-400 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)]"
-                                 : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50"
-                             )}>
-                               <Mail className={cn("w-4 h-4", booster.contactStartedOn === 'EMAIL' ? "stroke-[3]" : "stroke-[2]")} />
-                               {booster.contactStartedOn === 'EMAIL' && (
-                                 <div className="absolute -top-1 -right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm border border-emerald-200">
-                                   <Check className="w-2.5 h-2.5 stroke-[5]" />
-                                 </div>
-                               )}
-                             </div>
-                             <span className={cn(
-                               "text-[9px] font-black uppercase tracking-tighter transition-colors",
-                               booster.contactStartedOn === 'EMAIL' ? "text-emerald-400" : "text-white/20 group-hover/em-block:text-emerald-400/50"
-                             )}>
-                               {booster.contactStartedOn === 'EMAIL' ? 'Sent' : 'Mail'}
-                             </span>
-                          </button>
-                        </div>
-                      )}
-
-                      {!tg && !ds && !em && !rawName && (
-                        <div className="flex flex-col items-center gap-1">
-                          <span className="text-[12px] text-white/30 italic">No Identity</span>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingCell({ id: booster.id, field: 'telegram', value: '' });
-                            }}
-                            className="text-[9px] uppercase font-black text-[#D4AF37]/60 hover:text-[#D4AF37]"
-                          >
-                            Add Contact
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {showBigName && (
-                    <div className="pl-5 border-l border-white/10 ml-1.5 -mt-1 group-hover:border-[#D4AF37]/30 transition-colors">
-                      <span className="text-sm font-bold text-white/90 group-hover:text-[#D4AF37] transition-colors truncate block">
-                        {rawName}
-                      </span>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-        </td>
-        <td 
-          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games"
-          onClick={() => setEditingCell({ id: booster.id, field: 'games', value: booster.games || '' })}
-        >
-          <div className="flex items-center justify-between gap-1">
-            <CellContent val={booster.games} col="Games" />
-            <Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37] transition-all" />
-          </div>
-        </td>
-        {activeTab === 'RECRUITED' && (
-          <td className="px-3 py-2 border-b border-white/5">
-            <button
-              onClick={() => copyMasterInfo(booster)}
-              className={cn(
-                "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm border",
-                copiedId === `master-${booster.id}`
-                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
-                  : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/20"
-              )}
-            >
-              {copiedId === `master-${booster.id}` ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  Copy for Master
-                </>
-              )}
-            </button>
-          </td>
-        )}
-        <td 
-          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/status"
-          onClick={(e) => {
-            e.stopPropagation();
-            const rect = e.currentTarget.getBoundingClientRect();
-            setStatusPickerAnchor({ id: booster.id, rect });
-          }}
-        >
-          <div className="flex flex-col gap-1.5 relative">
-            <div className="flex items-center justify-between gap-2">
-              <div className={cn(
-                "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all",
-                statusConfig?.color
-              )}>
-                {statusConfig?.funnelLabel || booster.status}
-              </div>
-              <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
-            </div>
-            
-            <StatusProgress booster={booster} onMarkChecked={onMarkChecked} />
-          </div>
-        </td>
-        <td className="px-3 py-2 border-b border-white/5">
-          <div 
-            onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
-            className={cn(
-              "group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
-              booster.crmAccount 
-                ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
-                : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
-            )}
-          >
-            <span className={cn(
-              "text-[12px] uppercase font-bold tracking-wider truncate",
-              !booster.crmAccount && "italic font-normal text-[10px]"
-            )}>
-              {booster.crmAccount || 'Not Assigned'}
-            </span>
-            <div className="flex items-center gap-1.5 ml-2">
-              {booster.crmAccount && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    copyToClipboard(booster.crmAccount!, `crm-${booster.id}`);
-                  }}
-                  className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
-                  title="Copy CRM Account"
-                >
-                  <Copy className="w-3 h-3 text-emerald-400" />
-                </button>
-              )}
-              <Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100 transition-opacity" />
-            </div>
-          </div>
-        </td>
-        <td 
-          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/region"
-          onClick={() => setEditingCell({ id: booster.id, field: 'region', value: booster.region || '' })}
-        >
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center justify-between gap-1.5">
-              <div className="flex items-center gap-1.5">
-                <Globe className="w-2 h-2 text-[#D4AF37]/70" />
-                <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
-              </div>
-              <Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37] transition-all" />
-            </div>
-            <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
-          </div>
-        </td>
-        {dynamicColumns.map(col => {
-          const val = col === 'Status' ? booster.status : 
-                      col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() :
-                      (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
-          
-          return (
-            <td 
-              key={col} 
-              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/dynamic"
-              onClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <CellContent val={val} col={col} />
-                <Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] transition-all shrink-0" />
-              </div>
-            </td>
-          );
-        })}
-        <td className="px-3 py-2 border-b border-white/5 text-right">
-          <div className="flex items-center justify-end gap-2">
-            <div className="relative group/status-pick inline-block">
-              <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">
-                <Zap className="w-4 h-4" />
-              </button>
-              <div className="absolute right-0 bottom-full mb-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl opacity-0 translate-y-2 invisible group-hover/status-pick:opacity-100 group-hover/status-pick:visible group-hover/status-pick:translate-y-0 transition-all z-50 py-1 overflow-hidden">
-                {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => updateStatus(booster.id, status as any)}
-                    className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
-                  >
-                    {STATUS_CONFIG[status].funnelLabel}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button 
-              onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes || '' })}
-              className={cn(
-                "p-2.5 rounded-xl transition-all border shrink-0",
-                booster.notes
-                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.1)]"
-                  : "bg-white/5 border-white/10 text-white/20 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30"
-              )}
-              title="Edit Notes"
-            >
-              <Edit2 className="w-4 h-4" />
-            </button>
-          </div>
-        </td>
-      </>
-    );
-  };
-
-
-  const filteredBoosters = useMemo(() => {
-    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
-      return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
-    }
-    
-    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'WAITING FOR RECRUITMENT' && !dateRange.start && !dateRange.end) {
-      return [...boosters].filter(b => b.status === 'WAITING FOR RECRUITMENT' && !b.isArchived).sort((a, b) => b.createdSortTime - a.createdSortTime);
-    }
-
-    const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-    const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-
-    // Pre-calculate date filter boundaries if needed
-    let startBoundary = 0;
-    let endBoundary = Infinity;
-    if (dateRange.start) {
-      startBoundary = new Date(`${dateRange.start}T00:00:00+03:00`).getTime();
-    }
-    if (dateRange.end) {
-      endBoundary = new Date(`${dateRange.end}T23:59:59+03:00`).getTime();
-    }
-
-    return boosters.filter(b => {
-      // 1. Cheap checks first: Archive, Tab and Game Filter
-      if (activeTab === 'ARCHIVED') {
-        if (!b.isArchived) return false;
-        if (archivedStatusFilter !== 'ALL' && b.status !== archivedStatusFilter) return false;
-      } else {
-        if (b.isArchived) return false;
-        if (activeTab !== 'ALL' && b.status !== activeTab) return false;
-      }
-      
-      const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
-      if (!matchesGameFilter) return false;
-
-      // 2. Date checks - use pre-calculated timestamps
-      if (startBoundary > 0 || endBoundary < Infinity) {
-        if (b.createdSortTime < startBoundary || b.createdSortTime > endBoundary) return false;
-      }
-
-      // 3. Fast Search (Identity, IDs, Contacts)
-      if (searchTerms.length > 0) {
-        const matches = searchTerms.every(term => {
-          if (term.includes(':')) {
-            const parts = term.split(':');
-            const key = parts[0];
-            const val = parts.slice(1).join(':');
-            if (key === 'status') return b.status.toLowerCase().includes(val);
-            if (key === 'crm') return (b.crmAccount || '').toLowerCase().includes(val);
-            if (key === 'id') return b.id.toLowerCase().includes(val);
-            return b.fastSearchContent?.includes(term);
-          }
-          return b.fastSearchContent?.includes(term);
-        });
-        if (!matches) return false;
-      }
-
-      // 4. Deep Search (Games, Region, Working Hours, Custom Fields)
-      if (deepTerms.length > 0) {
-        const matches = deepTerms.every(term => {
-          return b.deepSearchContent?.includes(term) || b.fastSearchContent?.includes(term);
-        });
-        if (!matches) return false;
-      }
-      
-      return true;
-    }).sort((a, b) => {
-      if (activeTab === 'WAITING FOR RECRUITMENT') {
-        return b.createdSortTime - a.createdSortTime;
-      }
-      return b.statusSortTime - a.statusSortTime;
-    });
-  }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange]);
 
   const allGames = useMemo(() => {
     const gamesMap = new Map<string, string>();
@@ -3994,79 +3897,43 @@ Added to MasterFile`;
                   {(() => {
                     const rows = filteredBoosters.slice(
                       pageSize === 0 ? 0 : (currentPage - 1) * pageSize, 
-                      pageSize === 0 ? filteredBoosters.length : currentPage * pageSize
+                      pageSize === 0 ? Math.min(filteredBoosters.length, 500) : currentPage * pageSize
                     );
 
-                    // Disable animations for performance when viewing all
-                    if (pageSize === 0) {
-                      return rows.map((booster) => {
-                        const level = getNotificationLevel(booster);
-                        const statusConfig = STATUS_CONFIG[booster.status];
-                        return (
-                          <tr
-                            key={booster.id}
-                            className={cn(
-                              "group hover:bg-white/[0.02] transition-colors relative",
-                              selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
-                            )}
-                          >
-                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
-                              <div 
-                                onClick={() => toggleBoosterSelection(booster.id)}
-                                className={cn(
-                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
-                                  selectedBoosterIds.has(booster.id) 
-                                    ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
-                                    : "border-white/10 group-hover:border-[#D4AF37]/40"
-                                )}
-                              >
-                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
-                              </div>
-                            </td>
-                            {renderRowCells(booster, level, statusConfig)}
-                          </tr>
-                        );
-                      });
-                    }
-
-                    return (
-                      <AnimatePresence mode="popLayout" initial={false}>
-                        {rows.map((booster) => {
-                          const level = getNotificationLevel(booster);
-                          const statusConfig = STATUS_CONFIG[booster.status];
-                          return (
-                            <motion.tr
-                              key={booster.id}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0 }}
-                              className={cn(
-                                "group hover:bg-white/[0.02] transition-colors relative",
-                                selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
-                              )}
-                            >
-                               <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
-                              <div 
-                                onClick={() => toggleBoosterSelection(booster.id)}
-                                className={cn(
-                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
-                                  selectedBoosterIds.has(booster.id) 
-                                    ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
-                                    : "border-white/10 group-hover:border-[#D4AF37]/40"
-                                )}
-                              >
-                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
-                              </div>
-                            </td>
-                            {renderRowCells(booster, level, statusConfig)}
-                            </motion.tr>
-                          );
-                        })}
-                      </AnimatePresence>
-                    );
+                    return rows.map((booster) => {
+                      const level = getNotificationLevel(booster);
+                      const statusConfig = STATUS_CONFIG[booster.status];
+                      return (
+                        <BoosterRow
+                          key={booster.id}
+                          booster={booster}
+                          isSelected={selectedBoosterIds.has(booster.id)}
+                          level={level}
+                          statusConfig={statusConfig}
+                          activeTab={activeTab}
+                          dynamicColumns={dynamicColumns}
+                          archiveConfirmationId={archiveConfirmationId}
+                          copiedId={copiedId}
+                          onToggleSelection={toggleBoosterSelection}
+                          onToggleArchive={toggleArchive}
+                          onSetArchiveConfirm={setArchiveConfirmationId}
+                          onView={setViewingBooster}
+                          onEditCell={setEditingCell}
+                          onUpdateContactStart={updateContactStart}
+                          onUpdateStatus={updateStatus}
+                          onCopyMaster={copyMasterInfo}
+                          onMarkChecked={onMarkChecked}
+                        />
+                      );
+                    });
                   })()}
                 </tbody>
               </table>
+              {pageSize === 0 && filteredBoosters.length > 500 && (
+                <div className="p-12 text-center border-t border-white/5 bg-[#141416]/50">
+                  <p className="text-white/40 text-[11px] uppercase tracking-[0.2em] font-black">Showing first 500 records. Switch pagination for more.</p>
+                </div>
+              )}
             </div>
 
             {pageSize > 0 && filteredBoosters.length > pageSize && (

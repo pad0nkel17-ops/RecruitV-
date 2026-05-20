@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useDeferredValue, memo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { 
@@ -15,7 +15,6 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
-  Archive,
   RefreshCw,
   AlertCircle,
   Eye,
@@ -42,8 +41,7 @@ import {
   Zap,
   PlusCircle,
   Maximize2,
-  Mail,
-  StickyNote
+  Mail
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -88,8 +86,7 @@ interface Booster {
   fields: Record<string, string>;
   formTitle?: string;
   fastSearchContent?: string;
-  isArchived?: boolean;
-  updatedAt: string;
+  deepSearchContent?: string;
 }
 
 const CellContent = ({ val, col }: { val: any, col: string }) => {
@@ -154,86 +151,18 @@ const computeDeepSearchContent = (b: any): string => {
   return parts.join(' ').toLowerCase();
 };
 
-const pickApplicationDate = (submissionDate: any, ...otherDates: any[]) => {
-  const maxDate = new Date();
-  maxDate.setDate(maxDate.getDate() + 1); // Allow 1 day future for timezone safety
-
-  const parse = (d: any) => {
-    if (!d) return null;
-    const date = new Date(d);
-    if (isNaN(date.getTime())) return null;
-    if (date.getTime() < 1000000000) return null; // Filter out dates before 1970
-    if (date.getTime() > maxDate.getTime()) return null; // Filter out future dates
-    return date;
-  };
-
-  // 1. Try submission dates first (most reliable)
-  const subDate = parse(submissionDate);
-  if (subDate) return subDate.toISOString();
-
-  // 2. Try other dates (like fields from form answers)
-  const validOthers = otherDates.map(parse).filter(Boolean) as Date[];
-  if (validOthers.length === 0) return new Date().toISOString();
-  
-  // Pick the earliest valid date found
-  return new Date(Math.min(...validOthers.map(d => d.getTime()))).toISOString();
-};
-
 const enhanceBooster = (b: any): Booster => {
-  const fields = b.fields || {};
-  const getFVal = (keys: string[]) => {
-    const foundKey = Object.keys(fields).find(k => 
-      keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
-    );
-    const val = foundKey ? fields[foundKey] : '';
-    return (val && val !== '—') ? String(val).trim() : '';
-  };
-
-  let telegram = String(b.telegram || '').trim();
-  if (!telegram || telegram === '—') {
-    telegram = getFVal(['telegram', 'tg', 'user', 'contact', 'handle']);
-  }
-  
-  let discord = String(b.discord || '').trim();
-  if (!discord || discord === '—') {
-    discord = getFVal(['discord', 'ds', 'user', 'contact', 'handle']);
-  }
-  
-  let email = String(b.email || '').trim();
-  if (!email || email === '—') {
-    email = getFVal(['email', 'mail']);
-  }
-  
-  // Clean up identities (remove @)
-  if (telegram.startsWith('@')) telegram = telegram.substring(1);
-  if (discord.startsWith('@')) discord = discord.substring(1);
-
-  // Sync back to fields if name is missing
-  if (!fields['Name/Contact']) {
-    const fallbackName = fields['Full name'] || fields['Name'] || fields['Contact Name'] || fields['Identity'] || getFVal(['name', 'contact']);
-    if (fallbackName && fallbackName !== '—') fields['Name/Contact'] = String(fallbackName);
-  }
-
-  const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt || new Date().toISOString();
-
-  const parseTime = (dateStr: any) => {
-    const t = new Date(dateStr).getTime();
-    return isNaN(t) ? 0 : t;
-  };
-
-  const statusSortTime = parseTime(statusUpdatedAt);
-  const createdSortTime = parseTime(b.createdAt);
+  const statusUpdatedAt = b.statusUpdatedAt || b.updatedAt || b.createdAt;
+  const statusSortTime = new Date(statusUpdatedAt).getTime() || 0;
+  const createdSortTime = new Date(b.createdAt).getTime() || 0;
 
   return {
     ...b,
-    telegram,
-    discord,
-    email,
-    fields,
     statusUpdatedAt,
     statusSortTime,
     createdSortTime,
-    fastSearchContent: computeFastSearchContent({ ...b, telegram, discord, email })
+    fastSearchContent: computeFastSearchContent(b),
+    deepSearchContent: computeDeepSearchContent(b)
   };
 };
 
@@ -276,10 +205,10 @@ const getNotificationLevel = (booster: Booster) => {
   const updated = booster.statusUpdatedAt ? new Date(booster.statusUpdatedAt).getTime() : created;
   
   if (booster.status === 'WAITING FOR RECRUITMENT') {
-    const hoursWaiting = (now - created) / (1000 * 60 * 60);
+    const hoursWaiting = (now - updated) / (1000 * 60 * 60);
     if (hoursWaiting > 96) return 'URGENT';
     if (hoursWaiting > 48) return 'STALE';
-    return 'NEW'; 
+    return 'NEW'; // All WAITING entries are NEW until they qualify for STALE/URGENT or move
   }
   
   if (booster.status === 'RECRUITMENT IN PROCESS') {
@@ -479,21 +408,12 @@ const StatusProgress = ({ booster, onMarkChecked }: { booster: Booster, onMarkCh
     if (booster.contactStartedOn === 'DISCORD' && booster.discord) return `DS: ${booster.discord}`;
     
     // Fallbacks
-    if (booster.telegram && booster.telegram !== 'No Identity') return `TG: ${booster.telegram}`;
-    if (booster.discord && booster.discord !== 'No Identity') return `DS: ${booster.discord}`;
-    
-    const f = (booster.fields as any) || {};
-    const fullName = f['Full name'] || f['Name'] || f['Contact Name'];
+    if (booster.telegram) return `TG: ${booster.telegram}`;
+    if (booster.discord) return `DS: ${booster.discord}`;
+    const fullName = (booster.fields as any)?.['Full name'];
     if (fullName) return `Name: ${fullName}`;
-    
-    const dsUser = f['Discord Username'] || f['Discord ID'] || f['DiscordTag'] || f['Discord'];
+    const dsUser = (booster.fields as any)?.['Discord Username'];
     if (dsUser) return `DS: ${dsUser}`;
-    
-    const tgUser = f['Telegram Username'] || f['Telegram ID'] || f['Telegram'] || f['TG'];
-    if (tgUser) return `TG: ${tgUser}`;
-
-    if (booster.email) return `Email: ${booster.email}`;
-    
     return 'Identity: Unknown';
   };
 
@@ -620,247 +540,6 @@ interface DbSummary {
   total: number;
 }
 
-const BoosterRow = memo(({ 
-  booster, 
-  isSelected, 
-  level, 
-  statusConfig, 
-  activeTab,
-  dynamicColumns,
-  archiveConfirmationId,
-  copiedId,
-  onToggleSelection,
-  onToggleArchive,
-  onSetArchiveConfirm,
-  onView,
-  onEditCell,
-  onUpdateContactStart,
-  onUpdateStatus,
-  onCopyMaster,
-  onMarkChecked
-}: { 
-  booster: Booster;
-  isSelected: boolean;
-  level: string | null;
-  statusConfig: any;
-  activeTab: string;
-  dynamicColumns: string[];
-  archiveConfirmationId: string | null;
-  copiedId: string | null;
-  onToggleSelection: (id: string) => void;
-  onToggleArchive: (id: string, isArchived: boolean) => void;
-  onSetArchiveConfirm: (id: string | null) => void;
-  onView: (b: Booster) => void;
-  onEditCell: (cell: { id: string; field: string; value: string }) => void;
-  onUpdateContactStart: (id: string, type: 'TELEGRAM' | 'DISCORD' | 'EMAIL' | null) => void;
-  onUpdateStatus: (id: string, status: any) => void;
-  onCopyMaster: (b: Booster) => void;
-  onMarkChecked: (id: string) => void;
-}) => {
-  const rawName = booster.fields?.['Name/Contact'] || booster.fields?.['Name'] || '';
-  const tg = booster.telegram || '';
-  const ds = booster.discord || '';
-  const em = booster.email || '';
-
-  return (
-    <tr className={cn(
-      "group hover:bg-white/[0.02] transition-colors relative",
-      isSelected && "bg-[#D4AF37]/5"
-    )}>
-      <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
-        <div 
-          onClick={() => onToggleSelection(booster.id)}
-          className={cn(
-            "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
-            isSelected 
-              ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
-              : "border-white/10 group-hover:border-[#D4AF37]/40"
-          )}
-        >
-          {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
-        </div>
-      </td>
-      
-      {/* Identity Cell */}
-      <td className="px-3 py-2 border-b border-white/5">
-        <div className="flex flex-col gap-1.5 min-w-[170px]">
-          <div className="mb-1 flex items-center gap-2">
-            <button 
-              onClick={(e) => {
-                e.stopPropagation();
-                if (archiveConfirmationId === booster.id) {
-                  onToggleArchive(booster.id, !booster.isArchived);
-                  onSetArchiveConfirm(null);
-                } else {
-                  onSetArchiveConfirm(booster.id);
-                }
-              }}
-              className={cn(
-                "p-1.5 rounded-lg transition-all border shrink-0",
-                archiveConfirmationId === booster.id
-                  ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
-                  : booster.isArchived
-                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]"
-                    : "bg-white/5 border-white/10 text-white/20 hover:text-rose-400 hover:bg-rose-400/10 hover:border-rose-400/30"
-              )}
-              title={archiveConfirmationId === booster.id ? "Click again to confirm" : (booster.isArchived ? "Restore from Archive" : "Move to Archive")}
-            >
-              {archiveConfirmationId === booster.id ? <AlertCircle className="w-3 h-3" /> : (booster.isArchived ? <RefreshCw className="w-3 h-3" /> : <Archive className="w-3 h-3" />)}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onView(booster); }}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
-            >
-              <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
-              View
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onEditCell({ id: booster.id, field: 'Name/Contact', value: rawName });
-              }}
-              className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/10 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all active:scale-95"
-              title="Edit Real Name"
-            >
-               <Edit2 className="w-2 h-2" />
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
-              <span className="text-white/20 font-light select-none">:</span>
-              {level ? (
-                <div className={cn(
-                  "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
-                  level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
-                )}>
-                  {level}
-                </div>
-              ) : (
-                <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
-              )}
-              {booster.status === 'DUPLICATION' && (
-                <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
-                  <Copy className="w-2.5 h-2.5" />
-                  Duplicate
-                </div>
-              )}
-            </div>
-            <span className="text-white/20 font-light select-none">:</span>
-            <div className="flex flex-wrap items-center gap-2">
-              {tg && (
-                <div className="flex flex-col items-center gap-1">
-                  <div 
-                    className={cn(
-                      "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden text-blue-400",
-                      booster.contactStartedOn === 'TELEGRAM' ? "bg-blue-500/20 border-blue-500/60" : "bg-blue-500/10 border-blue-500/40"
-                    )}
-                    onClick={() => navigator.clipboard.writeText(tg)}
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span className="text-[13px] font-bold font-mono">{tg}</span>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all", booster.contactStartedOn === 'TELEGRAM' ? "bg-blue-500 border-blue-400 text-white" : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400")}><Check className="w-3 h-3" /></button>
-                </div>
-              )}
-              {ds && (
-                <div className="flex flex-col items-center gap-1">
-                  <div 
-                    className={cn(
-                      "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden text-indigo-400",
-                      booster.contactStartedOn === 'DISCORD' ? "bg-indigo-500/20 border-indigo-500/60" : "bg-indigo-500/10 border-indigo-500/40"
-                    )}
-                    onClick={() => navigator.clipboard.writeText(ds)}
-                  >
-                    <Users className="w-3.5 h-3.5" />
-                    <span className="text-[13px] font-bold font-mono">{ds}</span>
-                  </div>
-                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all", booster.contactStartedOn === 'DISCORD' ? "bg-indigo-500 border-indigo-400 text-white" : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400")}><Check className="w-3 h-3" /></button>
-                </div>
-              )}
-              {em && (
-                <div className="flex flex-col items-center gap-1">
-                  <div 
-                    className={cn(
-                      "w-10 h-10 rounded-full border flex items-center justify-center cursor-pointer transition-all shadow-md relative overflow-hidden text-emerald-400 group/mail",
-                      booster.contactStartedOn === 'EMAIL' ? "bg-emerald-500/20 border-emerald-500/60" : "bg-emerald-500/10 border-emerald-500/40"
-                    )}
-                    onClick={() => navigator.clipboard.writeText(em)}
-                  >
-                    <Mail className="w-4 h-4" />
-                    <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-[#D4AF37] text-black text-[8px] font-black px-1.5 py-0.5 rounded opacity-0 group-hover/mail:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">COPY MAIL</span>
-                  </div>
-                  <span className="text-[8px] font-black uppercase text-white/30 tracking-widest mt-[-2px]">Mail</span>
-                  <button onClick={(e) => { e.stopPropagation(); onUpdateContactStart(booster.id, booster.contactStartedOn === 'EMAIL' ? null : 'EMAIL'); }} className={cn("w-5 h-5 rounded-full border flex items-center justify-center transition-all mt-1", booster.contactStartedOn === 'EMAIL' ? "bg-emerald-500 border-emerald-400 text-white shadow-[0_0_10px_rgba(16,185,129,0.3)]" : "bg-white/5 border-white/10 text-white/20 hover:text-emerald-400")}><Check className="w-3 h-3" /></button>
-                </div>
-              )}
-              {!tg && !ds && !em && !rawName && (
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-[12px] text-white/30 italic">No Identity</span>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditCell({ id: booster.id, field: 'telegram', value: '' });
-                    }}
-                    className="text-[9px] uppercase font-black text-[#D4AF37]/60 hover:text-[#D4AF37] flex items-center gap-1"
-                  >
-                    <PlusCircle className="w-2.5 h-2.5" />
-                    Add Contact
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </td>
-
-      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games" onClick={() => onEditCell({ id: booster.id, field: 'games', value: booster.games || '' })}>
-        <div className="flex items-center justify-between gap-1"><CellContent val={booster.games} col="Games" /><Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37]" /></div>
-      </td>
-
-      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/status" onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); onEditCell({ id: booster.id, field: 'STATUS_PICKER', value: JSON.stringify(rect) }); }}>
-        <div className="flex flex-col gap-1.5 relative"><div className="flex items-center justify-between gap-2"><div className={cn("px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border shadow-sm", statusConfig?.color)}>{statusConfig?.funnelLabel || booster.status}</div><Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37]" /></div><StatusProgress booster={booster} onMarkChecked={onMarkChecked} /></div>
-      </td>
-
-      <td className="px-3 py-2 border-b border-white/5">
-        <div onClick={() => onEditCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })} className={cn("group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]", booster.crmAccount ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.1)]" : "bg-white/5 border-white/10 text-white/20 hover:bg-[#D4AF37]/5 hover:border-[#D4AF37]/30")}>
-          <span className={cn("text-[12px] uppercase font-bold tracking-wider truncate", !booster.crmAccount && "italic font-normal text-[10px]")}>{booster.crmAccount || 'Not Assigned'}</span>
-          <div className="flex items-center gap-1.5 ml-2">{booster.crmAccount && <button onClick={(e) => { e.stopPropagation(); onCopyMaster({ ...booster, _target: 'crm' } as any); }} className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20"><Copy className="w-3 h-3 text-emerald-400" /></button>}<Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100" /></div>
-        </div>
-      </td>
-
-      <td className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/region" onClick={() => onEditCell({ id: booster.id, field: 'region', value: booster.region || '' })}>
-        <div className="flex flex-col gap-0.5"><div className="flex items-center justify-between gap-1.5"><div className="flex items-center gap-1.5"><Globe className="w-2 h-2 text-[#D4AF37]/70" /><span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span></div><Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37]" /></div><span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span></div>
-      </td>
-
-      {dynamicColumns.map(col => {
-        const val = col === 'Status' ? booster.status : col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() : (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
-        return (
-          <td key={col} className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] group/dynamic" onClick={() => onEditCell({ id: booster.id, field: col, value: val || '' })}>
-            <div className="flex items-center justify-between gap-2"><CellContent val={val} col={col} /><Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] shrink-0" /></div>
-          </td>
-        );
-      })}
-
-      <td className="px-3 py-2 border-b border-white/5 text-right">
-        <div className="flex items-center justify-end gap-2">
-           <button onClick={() => onUpdateStatus(booster.id, 'WAITING FOR RECRUITMENT')} className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all shadow-sm"><Zap className="w-4 h-4" /></button>
-          <button onClick={() => onEditCell({ id: booster.id, field: 'notes', value: booster.notes || '' })} className={cn("p-2.5 rounded-xl transition-all border shrink-0", booster.notes ? "bg-amber-500/10 border-amber-500/30 text-amber-500" : "bg-white/5 border-white/10 text-white/20 hover:text-amber-500")}><StickyNote className="w-4 h-4" /></button>
-        </div>
-      </td>
-    </tr>
-  );
-}, (prev, next) => {
-  return prev.booster.id === next.booster.id && 
-         prev.booster.updatedAt === next.booster.updatedAt &&
-         prev.isSelected === next.isSelected &&
-         prev.archiveConfirmationId === next.archiveConfirmationId &&
-         prev.copiedId === next.copiedId &&
-         prev.level === next.level &&
-         prev.activeTab === next.activeTab &&
-         prev.dynamicColumns.length === next.dynamicColumns.length;
-});
-
 export default function App() {
   const [boosters, setBoosters] = useState<Booster[]>([]);
   const [viewingBooster, setViewingBooster] = useState<Booster | null>(null);
@@ -875,11 +554,6 @@ export default function App() {
   const [editingFormTitle, setEditingFormTitle] = useState('');
   const [dbSummaries, setDbSummaries] = useState<Record<string, DbSummary>>({});
   const [search, setSearch] = useState('');
-  const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
-    const saved = localStorage.getItem('recruitment_date_range');
-    if (saved) return JSON.parse(saved);
-    return { start: '', end: '' };
-  });
   const [deepSearch, setDeepSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const deferredDeepSearch = useDeferredValue(deepSearch);
@@ -896,24 +570,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [configTab, setConfigTab] = useState<'FIELDS' | 'BUILDER' | 'CONNECTION' | 'TOOLS'>('FIELDS');
   const [isSyncingHistorical, setIsSyncingHistorical] = useState(false);
-  const [isRollingBack, setIsRollingBack] = useState(false);
   const [syncHistoryRange, setSyncHistoryRange] = useState({ start: '', end: '' });
   const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
-  const [isSyncingLive, setIsSyncingLive] = useState(false);
   const [configStatus, setConfigStatus] = useState<string>('ALL');
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
   const [jotformKey, setJotformKey] = useState('');
   const [availableGames, setAvailableGames] = useState<string[]>([]);
-  const [gameEditorSearch, setGameEditorSearch] = useState('');
-  const [lastSyncBatchId, setLastSyncBatchId] = useState<string | undefined>();
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
-  const [archiveConfirmationId, setArchiveConfirmationId] = useState<string | null>(null);
-  const [isBulkArchiveConfirming, setIsBulkArchiveConfirming] = useState(false);
-  const [archivedStatusFilter, setArchivedStatusFilter] = useState<string | 'ALL'>('ALL');
-
-  const [improvedIds, setImprovedIds] = useState<string[]>([]);
-
   const [editingHeader, setEditingHeader] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
     const saved = localStorage.getItem('pageSize');
@@ -922,82 +586,6 @@ export default function App() {
   const [selectedBoosterIds, setSelectedBoosterIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const tableContainerRef = useRef<HTMLDivElement>(null);
-
-  const filteredBoosters = useMemo(() => {
-    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
-      return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
-    }
-    
-    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'WAITING FOR RECRUITMENT' && !dateRange.start && !dateRange.end) {
-      return [...boosters].filter(b => b.status === 'WAITING FOR RECRUITMENT' && !b.isArchived).sort((a, b) => b.createdSortTime - a.createdSortTime);
-    }
-
-    const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-    const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-
-    // Pre-calculate date filter boundaries if needed
-    let startBoundary = 0;
-    let endBoundary = Infinity;
-    if (dateRange.start) {
-      startBoundary = new Date(`${dateRange.start}T00:00:00+03:00`).getTime();
-    }
-    if (dateRange.end) {
-      endBoundary = new Date(`${dateRange.end}T23:59:59+03:00`).getTime();
-    }
-
-    return boosters.filter(b => {
-      // 1. Cheap checks first: Archive, Tab and Game Filter
-      if (activeTab === 'ARCHIVED') {
-        if (!b.isArchived) return false;
-        if (archivedStatusFilter !== 'ALL' && b.status !== archivedStatusFilter) return false;
-      } else {
-        if (b.isArchived) return false;
-        if (activeTab !== 'ALL' && b.status !== activeTab) return false;
-      }
-      
-      const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
-      if (!matchesGameFilter) return false;
-
-      // 2. Date checks - use pre-calculated timestamps
-      if (startBoundary > 0 || endBoundary < Infinity) {
-        if (b.createdSortTime < startBoundary || b.createdSortTime > endBoundary) return false;
-      }
-
-      // 3. Fast Search (Identity, IDs, Contacts)
-      if (searchTerms.length > 0) {
-        const matches = searchTerms.every(term => {
-          if (term.includes(':')) {
-            const parts = term.split(':');
-            const key = parts[0];
-            const val = parts.slice(1).join(':');
-            if (key === 'status') return b.status.toLowerCase().includes(val);
-            if (key === 'crm') return (b.crmAccount || '').toLowerCase().includes(val);
-            if (key === 'id') return b.id.toLowerCase().includes(val);
-            return b.fastSearchContent?.includes(term);
-          }
-          return b.fastSearchContent?.includes(term);
-        });
-        if (!matches) return false;
-      }
-
-      // 4. Deep Search
-      if (deepTerms.length > 0) {
-        const matches = deepTerms.every(term => {
-          const deepContent = computeDeepSearchContent(b);
-          return deepContent.includes(term) || b.fastSearchContent?.includes(term);
-        });
-        if (!matches) return false;
-      }
-      
-      return true;
-    }).sort((a, b) => {
-      if (activeTab === 'WAITING FOR RECRUITMENT') {
-        return b.createdSortTime - a.createdSortTime;
-      }
-      return b.statusSortTime - a.statusSortTime;
-    });
-  }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange, archivedStatusFilter]);
-
 
   useEffect(() => {
     localStorage.setItem('pageSize', pageSize.toString());
@@ -1009,16 +597,8 @@ export default function App() {
   const [notification, setNotification] = useState<{ message: string, type: 'SUCCESS' | 'ERROR' } | null>(null);
 
   useEffect(() => {
-    if (!editingCell || editingCell.field !== 'games') {
-      setGameEditorSearch('');
-    }
-  }, [editingCell]);
-
-  useEffect(() => {
     const handleClickOutside = () => {
       setStatusPickerAnchor(null);
-      setArchiveConfirmationId(null);
-      setIsBulkArchiveConfirming(false);
     };
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
@@ -1095,7 +675,23 @@ export default function App() {
     return { urgent, stale, fresh };
   }, [boosters]);
 
+  const [dateRange, setDateRange] = useState<{ start: string; end: string }>(() => {
+    const currentDay = getGMT3DateString();
+    const savedStart = localStorage.getItem('booster_filter_start_date');
+    
+    if (savedStart) {
+      return { start: savedStart, end: currentDay };
+    }
 
+    const now = new Date();
+    // Start of last month as a sensible default if none saved
+    const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    
+    return {
+      start: startOfPrevMonth.toISOString().split('T')[0],
+      end: currentDay
+    };
+  });
 
   useEffect(() => {
     fetchForms();
@@ -1108,13 +704,25 @@ export default function App() {
         const summaries: Record<string, DbSummary> = {};
         await Promise.all(forms.map(async (form) => {
            try {
-             // Fetch all data for summaries to ensure accurate counts across all statuses
-             const data = await firebaseService.getBoosterData(form.id, 'ALL');
+             const cachedVal = localStorage.getItem(`cache_boosters_${form.id}`);
+             let data: Booster[] = [];
+             if (cachedVal) {
+               data = JSON.parse(cachedVal);
+             } else {
+               const fbData = await firebaseService.getBoosterData(form.id);
+               data = fbData.map(d => ({
+                 id: d.id,
+                 createdAt: d.updatedAt,
+                 status: d.status as any,
+                 statusUpdatedAt: d.updatedAt,
+                 fields: d.fields || {}
+               } as Booster));
+             }
              
              summaries[form.id] = {
-               urgent: data.filter(b => getNotificationLevel(b as any) === 'URGENT').length,
-               stale: data.filter(b => getNotificationLevel(b as any) === 'STALE').length,
-               new: data.filter(b => getNotificationLevel(b as any) === 'NEW').length,
+               urgent: data.filter(b => getNotificationLevel(b) === 'URGENT').length,
+               stale: data.filter(b => getNotificationLevel(b) === 'STALE').length,
+               new: data.filter(b => getNotificationLevel(b) === 'NEW').length,
                total: data.length
              };
            } catch (e) {
@@ -1127,7 +735,7 @@ export default function App() {
     }
   }, [forms]);
 
-  const fetchForms = async (bypassCache = false) => {
+  const fetchForms = async () => {
     try {
       setFirebaseStatus('CONNECTING');
       // 1. Get Settings from Firebase
@@ -1142,13 +750,11 @@ export default function App() {
       const colRenames = fbSettings?.columnRenames || {};
       const jfKey = fbSettings?.jotformApiKey || '';
       const cachedGames = fbSettings?.availableGames || [];
-      const lastBatch = fbSettings?.lastSyncBatchId;
 
       setFieldSettings(fSettings);
       setColumnRenames(colRenames);
       setJotformKey(jfKey);
       setAvailableGames(cachedGames);
-      setLastSyncBatchId(lastBatch);
 
       // 2. Get local forms from Firebase
       const fbLocalForms = await firebaseService.getForms();
@@ -1164,10 +770,7 @@ export default function App() {
         const headers: any = {};
         if (jfKey) headers['x-jotform-api-key'] = jfKey;
 
-        const params: any = {};
-        if (bypassCache) params.t = Date.now();
-
-        const jfResp = await axios.get('/api/jotform-forms', { headers, params });
+        const jfResp = await axios.get('/api/jotform-forms', { headers });
         const allJf = jfResp.data.content || jfResp.data || [];
         
         const filtered = Array.isArray(allJf) ? allJf.filter((f: any) => {
@@ -1364,21 +967,9 @@ export default function App() {
       const updatedOverrides = { ...(existing?.fieldOverrides || {}), [field]: trimmedValue };
       const isCoreField = ['telegram', 'discord', 'email', 'games', 'workingHours', 'region', 'crmAccount'].includes(field);
       
-      const booster = boosters.find(b => String(b.id) === sId);
-      const initialData = booster ? {
-        telegram: booster.telegram,
-        discord: booster.discord,
-        email: booster.email,
-        games: booster.games,
-        workingHours: booster.workingHours,
-        region: booster.region,
-        createdAt: booster.createdAt,
-        fields: booster.fields
-      } : {};
-
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
-         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue, undefined, undefined, initialData);
+         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue);
       } else {
         const newEntry: BoosterData = existing ? {
           ...existing,
@@ -1392,7 +983,6 @@ export default function App() {
           notes: '',
           contactStartedOn: null,
           fieldOverrides: updatedOverrides,
-          createdAt: now,
           updatedAt: now,
           ...(isCoreField ? { [field]: trimmedValue } : {})
         };
@@ -1513,34 +1103,20 @@ export default function App() {
       // Hardcoded fallbacks if Jotform returns nothing but we want to provide something
       const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
       
-      const gamesMap = new Map<string, string>();
-      [...options, ...availableGames, ...hardcodedFallbacks].forEach(game => {
-        const trimmed = game?.trim();
-        if (trimmed) {
-          const lower = trimmed.toLowerCase();
-          if (!gamesMap.has(lower)) {
-            gamesMap.set(lower, trimmed);
-          }
-        }
-      });
-      const finalGames = Array.from(gamesMap.values()).sort((a, b) => a.localeCompare(b));
+      const finalGames = options.length > 0 ? options : (availableGames.length > 0 ? availableGames : hardcodedFallbacks);
       
       setAvailableGames(finalGames);
       
-      // Save globally if we found something new
+      // Save globally if we found something new or it was empty
       if (options.length > 0) {
-        await firebaseService.updateSettings({ availableGames: finalGames });
+        await firebaseService.updateSettings({ availableGames: options });
       }
     } catch (e) {
       console.error('Failed to fetch jotform questions', e);
     }
   };
 
-  const [archivedLoaded, setArchivedLoaded] = useState(false);
-  const [isArchiving, setIsArchiving] = useState(false);
-
-
-  const fetchData = async (formIdTarget?: string, forceAll = false) => {
+  const fetchData = async (formIdTarget?: string) => {
     const idToFetch = formIdTarget || selectedForm;
     if (!idToFetch) return;
     
@@ -1558,247 +1134,114 @@ export default function App() {
           const headers: any = {};
           if (jotformKey) headers['x-jotform-api-key'] = jotformKey;
 
-          let allSubs: any[] = [];
-          // Fetch up to 4 pages if needed, but deduplicate by ID
-          const seenIds = new Set<string>();
-          for (let offset = 0; offset < 4000; offset += 1000) {
-            const jfResp = await axios.get('/api/jotform-submissions', { 
-              params: { formId: idToFetch, limit: 1000, offset, t: Date.now() },
-              headers
-            });
-            const batch = jfResp.data.content || [];
-            if (batch.length === 0) break;
-            
-            let addedNew = false;
-            batch.forEach((sub: any) => {
-              if (!seenIds.has(sub.id)) {
-                seenIds.add(sub.id);
-                allSubs.push(sub);
-                addedNew = true;
-              }
-            });
-            
-            if (!addedNew || batch.length < 1000) break;
-          }
-
-          jotformSubs = allSubs.filter((sub: any) => {
+          const jfResp = await axios.get('/api/jotform-submissions', { 
+            params: { formId: idToFetch },
+            headers
+          });
+          jotformSubs = (jfResp.data.content || []).filter((sub: any) => {
             const subDate = new Date(sub.created_at);
-            return subDate >= new Date('2025-08-01'); 
-          }).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            return subDate.getFullYear() >= 2026;
+          });
         } catch (e) {
           console.error('Failed to fetch Jotform submissions');
         }
       }
 
       // 2. Fetch Firebase booster_data
-      // PERFORMANCE OPTIMIZATION: Only fetch ACTIVE by default unless explicitly requested or in Archive tab
-      const shouldLoadAll = forceAll || activeTab === 'ARCHIVED' || jotformSubs.length > 0;
-      // Actually, to prevent the "Deduplication Chaos", we ALWAYS need 'ALL' Ids if possible.
-      // But we can optimize the storage.
-      // Let's stick to 'ALL' if we have Jotform, otherwise 'ACTIVE' is enough for local.
-      const filter = (!idToFetch.startsWith('local_') || shouldLoadAll) ? 'ALL' : 'ACTIVE';
-      
-      fbData = await firebaseService.getBoosterData(idToFetch, filter);
-      if (filter === 'ALL') setArchivedLoaded(true);
+      fbData = await firebaseService.getBoosterData(idToFetch);
 
       // 3. Merge
-      const idMap = new Map<string, BoosterData>();
-      const tgMap = new Map<string, BoosterData>();
-      const dsMap = new Map<string, BoosterData>();
-      const emailMap = new Map<string, BoosterData>();
-
-      fbData.forEach(d => {
-        idMap.set(String(d.id), d);
-        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || '').toString().toLowerCase().trim();
-        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || '').toString().toLowerCase().trim();
-        const em = (d.email || d.fields?.Email || '').toString().toLowerCase().trim();
-        
-        if (tg && tg !== '—' && tg.length > 2) tgMap.set(tg, d);
-        if (ds && ds !== '—' && ds.length > 2) dsMap.set(ds, d);
-        if (em && em.includes('@')) emailMap.set(em, d);
-      });
-
       let merged: Booster[] = [];
 
-      // Unified Merge Logic
-      const mergedMap = new Map<string, Booster>();
-      const contactPool = new Map<string, string>(); // contactKey -> firstId encountered
-      
-      // 1. Index all Firebase items as base
-      const LIMIT_DATE = new Date('2025-08-01').getTime();
-      fbData.forEach(d => {
-        const fields = d.fields || {};
-        const getFVal = (keys: string[]) => {
-          const foundKey = Object.keys(fields).find(k => 
-            keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
-          );
-          return foundKey ? fields[foundKey] : '';
-        };
+      if (idToFetch.startsWith('local_')) {
+        // Local form data is entirely in Firebase
+        merged = fbData.map(d => {
+          const fields = d.fields || {};
+          const getFVal = (keys: string[]) => {
+            const foundKey = Object.keys(fields).find(k => 
+              keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
+            );
+            return foundKey ? fields[foundKey] : '';
+          };
 
-        const fbCreated = pickApplicationDate(
-          (d as any).createdAt, 
-          getFVal(['created_at', 'submission_date', 'date', 'form_date', 'posted']),
-          d.updatedAt
-        );
-        const fallbackId = String(d.id);
-        const itemDate = new Date(fbCreated).getTime();
-        if (isNaN(itemDate) || itemDate < LIMIT_DATE) return; // Skip old or invalid records
-
-        const sId = String(d.id);
-        
-        const tg = (d.telegram || d.fields?.Telegram || d.fields?.['Telegram Username'] || d.fields?.TG || d.fields?.Username || getFVal(['telegram', 'tg', 'contact', 'handle', 'username'])).toString().toLowerCase().trim();
-        const ds = (d.discord || d.fields?.Discord || d.fields?.['Discord ID'] || d.fields?.DS || d.fields?.['Discord Username'] || d.fields?.Social || getFVal(['discord', 'ds', 'handle', 'username'])).toString().toLowerCase().trim();
-        const em = (d.email || d.fields?.Email || d.fields?.mail || getFVal(['email', 'mail'])).toString().toLowerCase().trim();
-        const cKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
-                     (ds && ds !== '—' && ds.length > 2) ? ds : 
-                     (em && em.includes('@')) ? em : '';
-
-        if (cKey && !contactPool.has(cKey)) {
-          contactPool.set(cKey, sId);
-        } else if (cKey && contactPool.has(cKey) && !['RECRUITED', 'LOST', 'RESERVE', 'REJECTED'].includes(d.status) && contactPool.get(cKey) !== sId) {
-          // If we have multiple Firebase records, we should ideally treat them as duplicates too
-          // but for now we just let them exist in the pool as the base
-        }
-
-        mergedMap.set(sId, enhanceBooster({
-          id: sId,
-          createdAt: fbCreated,
-          telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
-          discord: d.discord || getFVal(['discord', 'ds']),
-          email: d.email || getFVal(['email', 'mail']),
-          games: d.games || getFVal(['games', 'game']),
-          workingHours: d.workingHours || getFVal(['hours', 'time']),
-          region: d.region || getFVal(['region', 'country']),
-          status: d.status as any,
-          statusUpdatedAt: d.statusUpdatedAt || d.updatedAt,
-          statusHistory: d.statusHistory || [],
-          crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
-          contactStartedOn: d.contactStartedOn as any,
-          notes: d.notes || '',
-          formId: d.formId,
-          fields: fields,
-          isArchived: d.isArchived || false,
-        }));
-      });
-
-      // 2. Overlay Jotform submissions
-      jotformSubs.forEach((sub: any) => {
-        const sId = String(sub.id);
-        const answers = sub.answers || {};
-        
-        const formatAnswer = (ans: any) => {
-          if (typeof ans === 'object' && ans !== null) {
-            if (ans.other) return String(ans.other);
-            return Object.values(ans).filter(v => typeof v === 'string').join(', ');
-          }
-          return String(ans || '');
-        };
-
-        const dynamicFields: Record<string, string> = {};
-        Object.values(answers).forEach((a: any) => {
-          if (a.text && a.answer !== undefined) {
-             dynamicFields[a.text] = formatAnswer(a.answer);
-          }
+          return enhanceBooster({
+            id: String(d.id),
+            createdAt: (d as any).createdAt || d.updatedAt,
+            telegram: d.telegram || getFVal(['telegram', 'tg', 'contact']),
+            discord: d.discord || getFVal(['discord', 'ds']),
+            email: d.email || getFVal(['email', 'mail']),
+            games: d.games || getFVal(['games', 'game']),
+            workingHours: d.workingHours || getFVal(['hours', 'time']),
+            region: d.region || getFVal(['region', 'country']),
+            status: d.status as any,
+            statusUpdatedAt: d.statusUpdatedAt || d.updatedAt,
+            statusHistory: d.statusHistory || [],
+            crmAccount: d.crmAccount || d.fieldOverrides?.['crmAccount'] || '',
+            contactStartedOn: d.contactStartedOn as any,
+            notes: d.notes,
+            formId: d.formId,
+            fields: fields,
+          });
         });
+      } else {
+        // Merge Jotform with Firebase
+        merged = jotformSubs.map((sub: any) => {
+          const sId = String(sub.id);
+          const persist = fbData.find(d => String(d.id) === sId);
+          const answers = sub.answers || {};
+          
+          const formatAnswer = (ans: any) => {
+            if (typeof ans === 'object' && ans !== null) {
+              if (ans.other) return String(ans.other);
+              return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+            }
+            return String(ans || '');
+          };
 
-        const getVal = (label: string) => {
-            const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
-            return entry ? formatAnswer(entry.answer) : '';
-        };
+          const dynamicFields: Record<string, string> = {};
+          Object.values(answers).forEach((a: any) => {
+            if (a.text && a.answer !== undefined) {
+               dynamicFields[a.text] = persist?.fieldOverrides?.[a.text] !== undefined 
+                ? persist.fieldOverrides[a.text] 
+                : formatAnswer(a.answer);
+            }
+          });
 
-        const tg = (getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username') || getVal('Handle')).toLowerCase().trim();
-        const ds = (getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social') || getVal('Username') || getVal('Handle')).toLowerCase().trim();
-        const em = (getVal('email') || getVal('mail') || getVal('Mail')).toLowerCase().trim();
-        const contactKey = (tg && tg !== '—' && tg.length > 2) ? tg : 
-                           (ds && ds !== '—' && ds.length > 2) ? ds : 
-                           (em && em.includes('@')) ? em : '';
+          const getVal = (label: string) => {
+              if (persist?.fieldOverrides?.[label] !== undefined) return persist.fieldOverrides[label];
+              const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
+              return entry ? formatAnswer(entry.answer) : '';
+          };
 
-        const existing = mergedMap.get(sId);
-        let calculatedStatus = existing ? existing.status : 'WAITING FOR RECRUITMENT';
-        
-        // Duplication check
-        if (!existing && contactKey) {
-           const firstId = contactPool.get(contactKey);
-           if (firstId && firstId !== sId) {
-             calculatedStatus = 'DUPLICATION';
-           } else if (!firstId) {
-             contactPool.set(contactKey, sId);
-           }
-        }
-
-        // Apply field overrides from existing if we have them
-        if (existing) {
-          // Keep existing fields that were overridden
-          const persistData = idMap.get(sId) || (contactKey ? (tgMap.get(contactKey) || dsMap.get(contactKey) || emailMap.get(contactKey)) : null);
-          if (persistData?.fieldOverrides) {
-            Object.entries(persistData.fieldOverrides).forEach(([k, v]) => {
-              if (k !== 'crmAccount') dynamicFields[k] = v;
-            });
-          }
-        }
-
-        const boosterObj = enhanceBooster({
-          id: sId,
-          createdAt: pickApplicationDate(
-            sub.created_at || sub.submission_date, 
-            sub.createdAt, 
-            existing?.createdAt,
-            getVal('Date'),
-            getVal('Time')
-          ),
-          telegram: getVal('Telegram') || getVal('Contact') || getVal('TG') || getVal('Username') || getVal('Handle'),
-          discord: getVal('Discord') || getVal('DS') || getVal('Discord ID') || getVal('Social') || getVal('Username') || getVal('Handle'),
-          email: getVal('email') || getVal('mail') || getVal('Mail'),
-          games: getVal('game') || getVal('What games') || getVal('Play') || getVal('Interests'),
-          workingHours: getVal('How long') || getVal('Working hours') || getVal('Schedule') || getVal('Time'),
-          region: getVal('region') || getVal('Country') || getVal('Location'),
-          status: calculatedStatus as any,
-          statusUpdatedAt: existing?.statusUpdatedAt || sub.created_at,
-          statusHistory: existing?.statusHistory || [],
-          crmAccount: existing?.crmAccount || '',
-          contactStartedOn: (existing?.contactStartedOn || null) as any,
-          notes: existing?.notes || '',
-          formId: idToFetch,
-          fields: dynamicFields,
-          isArchived: existing?.isArchived || false,
-          updatedAt: existing?.updatedAt || new Date().toISOString(),
+          return enhanceBooster({
+            id: sId,
+            createdAt: sub.created_at,
+            telegram: getVal('Telegram') || getVal('Contact'),
+            discord: getVal('Discord'),
+            email: getVal('email') || getVal('mail'),
+            games: getVal('game') || getVal('What games'),
+            workingHours: getVal('How long') || getVal('Working hours'),
+            region: getVal('region'),
+            status: (persist?.status || 'WAITING FOR RECRUITMENT') as any,
+            statusUpdatedAt: persist?.statusUpdatedAt || persist?.updatedAt || sub.created_at,
+            statusHistory: persist?.statusHistory || [],
+            crmAccount: persist?.crmAccount || persist?.fieldOverrides?.['crmAccount'] || '',
+            contactStartedOn: (persist?.contactStartedOn || null) as any,
+            notes: persist?.notes || '',
+            formId: idToFetch,
+            fields: dynamicFields,
+          });
         });
-
-        // PERSIST NEW JOTFORM SUBS TO FIREBASE IMMEDIATELY
-        if (!existing) {
-           firebaseService.saveBoosterData(boosterObj as unknown as BoosterData).catch(err => console.error('Failed to auto-sync new Jotform sub:', err));
-        }
-
-        mergedMap.set(sId, boosterObj);
-      });
-
-      merged = Array.from(mergedMap.values());
-
-      // BACKGROUND DATA INTEGRITY FIX
-      // If we found a better/different date than what's in Firebase, sync it back
-      const improvedIds: string[] = [];
-      merged.forEach(b => {
-        const fbVersion = idMap.get(b.id);
-        if (fbVersion && fbVersion.createdAt !== b.createdAt) {
-          improvedIds.push(b.id);
-          // Sync improved date back to Firebase in background
-          const { fastSearchContent, deepSearchContent, ...cleanData } = b as any;
-          firebaseService.saveBoosterData({
-             ...fbVersion,
-             createdAt: b.createdAt,
-             updatedAt: new Date().toISOString()
-          } as BoosterData).catch(err => console.error('Failed to sync improved date:', err));
-        }
-      });
-
-      if (improvedIds.length > 0) {
-        console.log(`Synced ${improvedIds.length} improved dates to Firebase`);
       }
 
       merged.sort((a, b) => b.statusSortTime - a.statusSortTime);
       setBoosters(merged);
       setError(null);
       
+      // Local storage cache
+      localStorage.setItem(`cache_boosters_${idToFetch}`, JSON.stringify(merged));
+      localStorage.setItem(`cache_time_${idToFetch}`, new Date().toISOString());
+
       // Check for duplicates in background if new entries arrived
       if (jotformSubs.length > 0) {
         setTimeout(() => scanGlobalDuplicates(true), 2000);
@@ -1852,7 +1295,6 @@ export default function App() {
         status: 'WAITING FOR RECRUITMENT',
         notes: '',
         contactStartedOn: null,
-        createdAt: now,
         updatedAt: now,
         fields: newRowData
       };
@@ -1958,81 +1400,14 @@ export default function App() {
     }
   };
 
-  const archiveAllByStatus = async (status: string) => {
-    const toArchive = boosters.filter(b => b.status === status && !b.isArchived);
-    if (toArchive.length === 0) return;
-    
-    if (!window.confirm(`Are you sure you want to archive ALL ${toArchive.length} boosters in status "${status}"?`)) return;
-
-    setIsArchiving(true);
-    setRefreshing(true);
-    try {
-      const ids = toArchive.map(b => b.id);
-      for (let i = 0; i < ids.length; i += 50) {
-        const batch = ids.slice(i, i + 50);
-        await Promise.all(batch.map(id => firebaseService.archiveBooster(id, true)));
-      }
-      setBoosters(prev => prev.map(b => (b.status === status && !b.isArchived) ? { ...b, isArchived: true } : b));
-      setNotification({ message: `Archived ${toArchive.length} boosters from ${status}`, type: 'SUCCESS' });
-    } catch (err) {
-      setNotification({ message: 'Failed to archive by status', type: 'ERROR' });
-    } finally {
-      setIsArchiving(false);
-      setRefreshing(false);
-    }
-  };
-
-  const unarchiveAllByStatus = async (status: string | 'ALL') => {
-    const toRestore = boosters.filter(b => b.isArchived && (status === 'ALL' || b.status === status));
-    if (toRestore.length === 0) return;
-    
-    if (!window.confirm(`Are you sure you want to RESTORE ALL ${toRestore.length} boosters ${status === 'ALL' ? '' : `in status "${status}" `}from Archive?`)) return;
-
-    setRefreshing(true);
-    try {
-      const ids = toRestore.map(b => b.id);
-      for (let i = 0; i < ids.length; i += 50) {
-        const batch = ids.slice(i, i + 50);
-        await Promise.all(batch.map(id => firebaseService.archiveBooster(id, false)));
-      }
-      setBoosters(prev => prev.map(b => (b.isArchived && (status === 'ALL' || b.status === status)) ? { ...b, isArchived: false } : b));
-      setNotification({ message: `Restored ${toRestore.length} boosters to active recruitment`, type: 'SUCCESS' });
-    } catch (err) {
-      setNotification({ message: 'Failed to restore by status', type: 'ERROR' });
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const toggleArchive = async (id: string, isArchived: boolean) => {
-    try {
-      await firebaseService.archiveBooster(id, isArchived);
-      setBoosters(prev => prev.map(b => b.id === id ? { ...b, isArchived } : b));
-      setNotification({ message: isArchived ? 'Application archived' : 'Application restored', type: 'SUCCESS' });
-    } catch (err) {
-      setNotification({ message: 'Failed to update archive status', type: 'ERROR' });
-    }
-  };
-
-  const handleBulkArchive = async (isArchived: boolean) => {
-    if (selectedBoosterIds.size === 0) return;
-    const ids = Array.from(selectedBoosterIds);
-    setRefreshing(true);
-    try {
-      await Promise.all(ids.map((id: string) => firebaseService.archiveBooster(id, isArchived)));
-      setBoosters(prev => prev.map(b => (ids as string[]).includes(b.id) ? { ...b, isArchived } : b));
-      setSelectedBoosterIds(new Set());
-      setNotification({ message: `${ids.length} applications ${isArchived ? 'archived' : 'restored'}`, type: 'SUCCESS' });
-    } catch (err) {
-      setNotification({ message: 'Failed to bulk archive', type: 'ERROR' });
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   useEffect(() => {
     if (selectedForm) {
       localStorage.setItem('selected_database', selectedForm);
+      const cached = localStorage.getItem(`cache_boosters_${selectedForm}`);
+      if (cached) {
+        setBoosters(JSON.parse(cached));
+        setLoading(false);
+      }
       fetchData(selectedForm);
     }
   }, [selectedForm]);
@@ -2048,19 +1423,7 @@ export default function App() {
       return;
     }
     try {
-      const booster = boosters.find(b => String(b.id) === sId);
-      const initialData = booster ? {
-        telegram: booster.telegram,
-        discord: booster.discord,
-        email: booster.email,
-        games: booster.games,
-        workingHours: booster.workingHours,
-        region: booster.region,
-        createdAt: booster.createdAt,
-        fields: booster.fields
-      } : {};
-
-      await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount, initialData);
+      await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount);
       
       setNotification({ message: `Booster moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });
 
@@ -2124,20 +1487,7 @@ export default function App() {
       }
 
       await Promise.all(
-        sIds.map(id => {
-          const booster = boosters.find(b => String(b.id) === id);
-          const initialData = booster ? {
-            telegram: booster.telegram,
-            discord: booster.discord,
-            email: booster.email,
-            games: booster.games,
-            workingHours: booster.workingHours,
-            region: booster.region,
-            createdAt: booster.createdAt,
-            fields: booster.fields
-          } : {};
-          return firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount, initialData);
-        })
+        sIds.map(id => firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount))
       );
       
       setNotification({ message: `${sIds.length} Boosters moved to ${STATUS_CONFIG[status].funnelLabel}`, type: 'SUCCESS' });
@@ -2290,40 +1640,445 @@ Added to MasterFile`;
     copyToClipboard(text, `master-${booster.id}`);
   };
 
+  const renderRowCells = (booster: Booster, level: string | null, statusConfig: any) => {
+    return (
+      <>
+        <td className="px-3 py-2 border-b border-white/5">
+          <div className="flex flex-col gap-1.5 min-w-[170px]">
+            {(() => {
+              const rawName = booster.fields?.['Name/Contact'] || '';
+              const tg = booster.telegram || '';
+              const ds = booster.discord || '';
+              const em = booster.email || '';
+              const showBigName = rawName && 
+                                  rawName.toLowerCase() !== tg.toLowerCase() && 
+                                  rawName.toLowerCase() !== ds.toLowerCase() &&
+                                  rawName.toLowerCase() !== em.toLowerCase();
+
+              return (
+                <>
+                  <div className="mb-1 flex items-center gap-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setViewingBooster(booster); }}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#007AFF] text-white text-[9px] font-black uppercase tracking-widest hover:bg-[#0063CC] transition-all shadow-lg active:scale-95 shrink-0 group/view-btn border border-white/5"
+                    >
+                      <Maximize2 className="w-2.5 h-2.5 group-hover:scale-110 transition-transform" />
+                      View
+                    </button>
+                    {showBigName && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingCell({ id: booster.id, field: 'Name/Contact', value: rawName });
+                        }}
+                        className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all active:scale-95"
+                        title="Edit Real Name"
+                      >
+                         <Edit2 className="w-2 h-2" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-white/40 font-mono tracking-tighter uppercase whitespace-nowrap">#{booster.id.slice(0, 6)}</span>
+                      <span className="text-white/20 font-light select-none">:</span>
+                      {level ? (
+                        <div className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-widest whitespace-nowrap",
+                          level === 'URGENT' ? 'bg-rose-500 text-white' : level === 'STALE' ? 'bg-amber-500 text-black' : 'bg-blue-400 text-white'
+                        )}>
+                          {level}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-white/20 uppercase font-black tracking-widest">Normal</span>
+                      )}
+                      {booster.status === 'DUPLICATION' && (
+                        <div className="px-1.5 py-0.5 rounded bg-purple-500/20 border border-purple-500/40 text-[10px] font-black text-purple-400 uppercase tracking-widest flex items-center gap-1 animate-pulse">
+                          <Copy className="w-2.5 h-2.5" />
+                          Duplicate
+                        </div>
+                      )}
+                    </div>
+                    
+                    <span className="text-white/20 font-light select-none">:</span>
+                    
+                    <div className="flex flex-wrap gap-2">
+                      {tg && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div 
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                              booster.contactStartedOn === 'TELEGRAM' 
+                                ? "bg-blue-500/20 border-blue-500/60 ring-1 ring-blue-500/30" 
+                                : "bg-blue-500/10 border-blue-500/40 hover:bg-blue-500/20 hover:border-blue-500/60"
+                            )}
+                            onClick={() => copyToClipboard(tg, `tg-${booster.id}`)}
+                          >
+                            <MessageSquare className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
+                            <span className="text-[14px] font-bold text-blue-50/90 font-mono tracking-tight">{tg}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingCell({ id: booster.id, field: 'telegram', value: tg });
+                              }}
+                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'TELEGRAM' ? null : 'TELEGRAM');
+                            }}
+                            className={cn(
+                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                              booster.contactStartedOn === 'TELEGRAM'
+                                ? "bg-blue-500 border-blue-400 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                                : "bg-white/5 border-white/10 text-white/20 hover:text-blue-400 hover:border-blue-500/50 hover:bg-blue-500/10"
+                            )}
+                            title="Mark as Contacted via Telegram"
+                          >
+                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'TELEGRAM' ? "stroke-[4]" : "stroke-[2]")} />
+                          </button>
+                        </div>
+                      )}
+                      {ds && (
+                        <div className="flex flex-col items-center gap-1">
+                          <div 
+                            className={cn(
+                              "flex items-center gap-2 px-2 py-1 rounded-lg border group/link cursor-pointer transition-all shadow-md relative overflow-hidden",
+                              booster.contactStartedOn === 'DISCORD'
+                                ? "bg-indigo-500/20 border-indigo-500/60 ring-1 ring-indigo-500/30"
+                                : "bg-indigo-500/10 border-indigo-500/40 hover:bg-indigo-500/20 hover:border-indigo-500/60"
+                            )}
+                            onClick={() => copyToClipboard(ds, `ds-${booster.id}`)}
+                          >
+                            <Users className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+                            <span className="text-[14px] font-bold text-indigo-50/90 font-mono tracking-tight">{ds}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingCell({ id: booster.id, field: 'discord', value: ds });
+                              }}
+                              className="ml-1 p-0.5 opacity-0 group-hover/link:opacity-100 hover:text-white transition-opacity"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'DISCORD' ? null : 'DISCORD');
+                            }}
+                            className={cn(
+                              "flex items-center justify-center w-6 h-6 rounded-full border transition-all",
+                              booster.contactStartedOn === 'DISCORD'
+                                ? "bg-indigo-500 border-indigo-400 text-white shadow-[0_0_10px_rgba(99,102,241,0.5)]"
+                                : "bg-white/5 border-white/10 text-white/20 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/10"
+                            )}
+                            title="Mark as Contacted via Discord"
+                          >
+                            <Check className={cn("w-3.5 h-3.5", booster.contactStartedOn === 'DISCORD' ? "stroke-[4]" : "stroke-[2]")} />
+                          </button>
+                        </div>
+                      )}
+                      
+                      {em && (
+                        <div className="flex flex-col items-center gap-1 group/em-block">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateContactStart(booster.id, booster.contactStartedOn === 'EMAIL' ? null : 'EMAIL');
+                            }}
+                            className={cn(
+                              "flex flex-col items-center gap-1 transition-all",
+                              booster.contactStartedOn === 'EMAIL' ? "scale-105" : "hover:scale-105"
+                            )}
+                            title={booster.contactStartedOn === 'EMAIL' ? "Unmark Email Sent" : "Mark as Email Sent"}
+                          >
+                             <div className={cn(
+                               "w-8 h-8 rounded-xl border flex items-center justify-center transition-all shadow-md relative group/mail-icon",
+                               booster.contactStartedOn === 'EMAIL'
+                                 ? "bg-emerald-500 border-emerald-400 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                                 : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50"
+                             )}>
+                               <Mail className={cn("w-4 h-4", booster.contactStartedOn === 'EMAIL' ? "stroke-[3]" : "stroke-[2]")} />
+                               {booster.contactStartedOn === 'EMAIL' && (
+                                 <div className="absolute -top-1 -right-1 bg-white text-emerald-600 rounded-full p-0.5 shadow-sm border border-emerald-200">
+                                   <Check className="w-2.5 h-2.5 stroke-[5]" />
+                                 </div>
+                               )}
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase tracking-tighter transition-colors",
+                               booster.contactStartedOn === 'EMAIL' ? "text-emerald-400" : "text-white/20 group-hover/em-block:text-emerald-400/50"
+                             )}>
+                               {booster.contactStartedOn === 'EMAIL' ? 'Sent' : 'Mail'}
+                             </span>
+                          </button>
+                        </div>
+                      )}
+
+                      {!tg && !ds && !em && !rawName && (
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-[12px] text-white/30 italic">No Identity</span>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCell({ id: booster.id, field: 'telegram', value: '' });
+                            }}
+                            className="text-[9px] uppercase font-black text-[#D4AF37]/60 hover:text-[#D4AF37]"
+                          >
+                            Add Contact
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {showBigName && (
+                    <div className="pl-5 border-l border-white/10 ml-1.5 -mt-1 group-hover:border-[#D4AF37]/30 transition-colors">
+                      <span className="text-sm font-bold text-white/90 group-hover:text-[#D4AF37] transition-colors truncate block">
+                        {rawName}
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        </td>
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/games"
+          onClick={() => setEditingCell({ id: booster.id, field: 'games', value: booster.games || '' })}
+        >
+          <div className="flex items-center justify-between gap-1">
+            <CellContent val={booster.games} col="Games" />
+            <Edit2 className="w-3 h-3 text-white/0 group-hover/games:text-[#D4AF37] transition-all" />
+          </div>
+        </td>
+        {activeTab === 'RECRUITED' && (
+          <td className="px-3 py-2 border-b border-white/5">
+            <button
+              onClick={() => copyMasterInfo(booster)}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm border",
+                copiedId === `master-${booster.id}`
+                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
+                  : "bg-[#D4AF37]/10 border-[#D4AF37]/30 text-[#D4AF37] hover:bg-[#D4AF37]/20"
+              )}
+            >
+              {copiedId === `master-${booster.id}` ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Copied
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy for Master
+                </>
+              )}
+            </button>
+          </td>
+        )}
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/status"
+          onClick={(e) => {
+            e.stopPropagation();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setStatusPickerAnchor({ id: booster.id, rect });
+          }}
+        >
+          <div className="flex flex-col gap-1.5 relative">
+            <div className="flex items-center justify-between gap-2">
+              <div className={cn(
+                "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest border w-fit shadow-sm transition-all",
+                statusConfig?.color
+              )}>
+                {statusConfig?.funnelLabel || booster.status}
+              </div>
+              <Edit2 className="w-3 h-3 text-white/0 group-hover/status:text-[#D4AF37] transition-all" />
+            </div>
+            
+            <StatusProgress booster={booster} onMarkChecked={onMarkChecked} />
+          </div>
+        </td>
+        <td className="px-3 py-2 border-b border-white/5">
+          <div 
+            onClick={() => setEditingCell({ id: booster.id, field: 'crmAccount', value: booster.crmAccount || '' })}
+            className={cn(
+              "group/crm px-3 py-1.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between min-w-[140px]",
+              booster.crmAccount 
+                ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400 font-black shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
+                : "bg-white/5 border-white/10 text-white/20 hover:border-[#D4AF37]/30 hover:bg-[#D4AF37]/5"
+            )}
+          >
+            <span className={cn(
+              "text-[12px] uppercase font-bold tracking-wider truncate",
+              !booster.crmAccount && "italic font-normal text-[10px]"
+            )}>
+              {booster.crmAccount || 'Not Assigned'}
+            </span>
+            <div className="flex items-center gap-1.5 ml-2">
+              {booster.crmAccount && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyToClipboard(booster.crmAccount!, `crm-${booster.id}`);
+                  }}
+                  className="p-1 px-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                  title="Copy CRM Account"
+                >
+                  <Copy className="w-3 h-3 text-emerald-400" />
+                </button>
+              )}
+              <Edit2 className="w-3 h-3 opacity-40 group-hover/crm:opacity-100 transition-opacity" />
+            </div>
+          </div>
+        </td>
+        <td 
+          className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/region"
+          onClick={() => setEditingCell({ id: booster.id, field: 'region', value: booster.region || '' })}
+        >
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <Globe className="w-2 h-2 text-[#D4AF37]/70" />
+                <span className="text-[10px] text-white/80 font-bold uppercase tracking-widest">{booster.region || '—'}</span>
+              </div>
+              <Edit2 className="w-2.5 h-2.5 text-white/0 group-hover/region:text-[#D4AF37] transition-all" />
+            </div>
+            <span className="text-[9px] text-white/40 font-mono ml-3.5">{new Date(booster.createdAt).toLocaleDateString()}</span>
+          </div>
+        </td>
+        {dynamicColumns.map(col => {
+          const val = col === 'Status' ? booster.status : 
+                      col === 'Application Date' ? new Date(booster.createdAt).toLocaleDateString() :
+                      (booster as any)[col.toLowerCase()] || (booster.fields as any)[col];
+          
+          return (
+            <td 
+              key={col} 
+              className="px-3 py-2 border-b border-white/5 cursor-pointer hover:bg-white/[0.02] transition-colors group/dynamic"
+              onClick={() => setEditingCell({ id: booster.id, field: col, value: val || '' })}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <CellContent val={val} col={col} />
+                <Edit2 className="w-3 h-3 text-white/0 group-hover/dynamic:text-[#D4AF37] transition-all shrink-0" />
+              </div>
+            </td>
+          );
+        })}
+        <td className="px-3 py-2 border-b border-white/5 text-right">
+          <div className="flex items-center justify-end gap-2">
+            <div className="relative group/status-pick inline-block">
+              <button className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30 transition-all hover:shadow-[0_0_15px_rgba(212,175,55,0.15)] hover:scale-105 active:scale-95">
+                <Zap className="w-4 h-4" />
+              </button>
+              <div className="absolute right-0 bottom-full mb-2 w-48 bg-[#141416] border border-[#2D2D30] rounded-xl shadow-2xl opacity-0 translate-y-2 invisible group-hover/status-pick:opacity-100 group-hover/status-pick:visible group-hover/status-pick:translate-y-0 transition-all z-50 py-1 overflow-hidden">
+                {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => updateStatus(booster.id, status as any)}
+                    className="w-full text-left px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-[#D4AF37] hover:bg-[#D4AF37]/5 transition-colors border-b border-white/5 last:border-0"
+                  >
+                    {STATUS_CONFIG[status].funnelLabel}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button 
+              onClick={() => setEditingCell({ id: booster.id, field: 'notes', value: booster.notes || '' })}
+              className={cn(
+                "p-2.5 rounded-xl transition-all border shrink-0",
+                booster.notes
+                  ? "bg-amber-500/10 border-amber-500/30 text-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.1)]"
+                  : "bg-white/5 border-white/10 text-white/20 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 hover:border-[#D4AF37]/30"
+              )}
+              title="Edit Notes"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+          </div>
+        </td>
+      </>
+    );
+  };
+
+
+  const filteredBoosters = useMemo(() => {
+    if (!deferredSearch && !deferredDeepSearch && !gameFilter && activeTab === 'ALL' && !dateRange.start && !dateRange.end) {
+      return [...boosters].sort((a, b) => b.statusSortTime - a.statusSortTime);
+    }
+
+    const searchTerms = deferredSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+    const deepTerms = deferredDeepSearch.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+
+    // Pre-calculate date filter boundaries if needed
+    let startBoundary = 0;
+    let endBoundary = Infinity;
+    if (dateRange.start) {
+      startBoundary = new Date(`${dateRange.start}T00:00:00+03:00`).getTime();
+    }
+    if (dateRange.end) {
+      endBoundary = new Date(`${dateRange.end}T23:59:59+03:00`).getTime();
+    }
+
+    return boosters.filter(b => {
+      // 1. Cheap checks first: Tab and Game Filter
+      if (activeTab !== 'ALL' && b.status !== activeTab) return false;
+      
+      const matchesGameFilter = !gameFilter || b.games?.toLowerCase().includes(gameFilter.toLowerCase());
+      if (!matchesGameFilter) return false;
+
+      // 2. Date checks - use pre-calculated timestamps
+      if (startBoundary > 0 || endBoundary < Infinity) {
+        if (b.createdSortTime < startBoundary || b.createdSortTime > endBoundary) return false;
+      }
+
+      // 3. Fast Search (Identity, IDs, Contacts)
+      if (searchTerms.length > 0) {
+        const matches = searchTerms.every(term => {
+          if (term.includes(':')) {
+            const parts = term.split(':');
+            const key = parts[0];
+            const val = parts.slice(1).join(':');
+            if (key === 'status') return b.status.toLowerCase().includes(val);
+            if (key === 'crm') return (b.crmAccount || '').toLowerCase().includes(val);
+            if (key === 'id') return b.id.toLowerCase().includes(val);
+            return b.fastSearchContent?.includes(term);
+          }
+          return b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
+      }
+
+      // 4. Deep Search (Games, Region, Working Hours, Custom Fields)
+      if (deepTerms.length > 0) {
+        const matches = deepTerms.every(term => {
+          return b.deepSearchContent?.includes(term) || b.fastSearchContent?.includes(term);
+        });
+        if (!matches) return false;
+      }
+      
+      return true;
+    }).sort((a, b) => b.statusSortTime - a.statusSortTime);
+  }, [boosters, deferredSearch, deferredDeepSearch, gameFilter, activeTab, dateRange]);
+
   const allGames = useMemo(() => {
-    const gamesMap = new Map<string, string>();
+    const games = new Set<string>();
     boosters.forEach(b => {
       if (b.games) {
         b.games.split(/[,;|]+/).forEach(g => {
           const trimmed = g.trim();
-          if (trimmed) {
-            const lower = trimmed.toLowerCase();
-            if (!gamesMap.has(lower)) {
-              gamesMap.set(lower, trimmed);
-            }
-          }
+          if (trimmed) games.add(trimmed);
         });
       }
     });
-    return Array.from(gamesMap.values()).sort();
+    return Array.from(games).sort();
   }, [boosters]);
-
-  const mergedAvailableGames = useMemo(() => {
-    const hardcodedFallbacks = ['World of Warcraft', 'Destiny 2', 'Diablo 4', 'League of Legends', 'Valorant', 'Counter-Strike 2', 'Escape from Tarkov', 'Path of Exile'];
-    const gamesMap = new Map<string, string>();
-    
-    [...availableGames, ...allGames, ...hardcodedFallbacks].forEach(game => {
-      const trimmed = game?.trim();
-      if (trimmed) {
-        const lower = trimmed.toLowerCase();
-        if (!gamesMap.has(lower)) {
-          gamesMap.set(lower, trimmed);
-        }
-      }
-    });
-
-    return Array.from(gamesMap.values()).sort((a, b) => a.localeCompare(b));
-  }, [availableGames, allGames]);
 
   const sidebarGroups = [
     {
@@ -2336,21 +2091,8 @@ Added to MasterFile`;
           icon: cfg.icon
         }))
       ]
-    },
-    {
-      label: 'Archive',
-      items: [
-        { label: 'System Archive', value: 'ARCHIVED', icon: Archive }
-      ]
     }
   ];
-
-  const handleSidebarTabClick = (tabValue: string) => {
-    setActiveTab(tabValue as any);
-    if (tabValue === 'ARCHIVED' && !archivedLoaded) {
-      fetchData(selectedForm, true);
-    }
-  };
 
   if (loading && !refreshing && !boosters.length) {
     return (
@@ -2442,8 +2184,7 @@ Added to MasterFile`;
           <div className="flex items-center gap-3">
              <RefreshCw 
                className={cn("w-3.5 h-3.5 cursor-pointer opacity-50 hover:opacity-100 transition-all", refreshing && "animate-spin")} 
-               onClick={() => { fetchForms(true); fetchData(selectedForm, true); }}
-               title="Deep Refresh (Bypass Cache)"
+               onClick={() => { fetchForms(); fetchData(); }}
              />
              <button className="lg:hidden" onClick={() => setIsSidebarOpen(false)}>
                <X className="w-5 h-5 text-[#94949E]" />
@@ -2675,106 +2416,39 @@ Added to MasterFile`;
             <div className="space-y-1">
               {group.items.map((item) => {
                 const isActive = activeTab === item.value;
-                const tabBoosters = boosters.filter(b => {
-                  if (item.value === 'ARCHIVED') return b.isArchived;
-                  if (b.isArchived) return false;
-                  if (item.value === 'ALL') return true;
-                  return b.status === item.value;
-                });
+                const tabBoosters = item.value === 'ALL' ? boosters : boosters.filter(b => b.status === item.value);
                 const count = tabBoosters.length;
                 
                 // Calculate notifications for this tab
                 const notificationLevelCount = tabBoosters.filter(b => getNotificationLevel(b)).length;
 
                 return (
-                  <div key={item.value}>
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => { handleSidebarTabClick(item.value); setSelectedBoosterIds(new Set()); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { handleSidebarTabClick(item.value); setSelectedBoosterIds(new Set()); } }}
-                      className={cn(
-                        "w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-all group/tab relative shadow-sm cursor-pointer outline-none",
-                        isActive ? "bg-white/[0.04] text-white ring-1 ring-white/10" : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-                      )}
-                    >
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <item.icon className={cn("w-4 h-4 transition-colors shrink-0", isActive ? "text-[#D4AF37]" : "opacity-30 group-hover:opacity-70 dark:group-hover:text-[#D4AF37]")} />
-                        <div className="flex flex-col items-start overflow-hidden">
-                          <span className="leading-tight font-medium tracking-tight whitespace-nowrap truncate w-full">{item.label}</span>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className={cn("text-[11px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/40 group-hover:text-white/60")}>
-                              {count.toString().padStart(2, '0')}
-                            </span>
-                          </div>
+                  <button
+                    key={item.value}
+                    onClick={() => { setActiveTab(item.value); setSelectedBoosterIds(new Set()); }}
+                    className={cn(
+                      "w-auto min-w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-sm transition-all group/tab relative shadow-sm",
+                      isActive ? "bg-white/[0.04] text-white ring-1 ring-white/10" : "text-white/50 hover:text-white hover:bg-white/[0.02]"
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <item.icon className={cn("w-4 h-4 transition-colors", isActive ? "text-[#D4AF37]" : "opacity-30 group-hover:opacity-70 dark:group-hover:text-[#D4AF37]")} />
+                      <div className="flex flex-col items-start">
+                        <span className="leading-tight font-medium tracking-tight whitespace-nowrap">{item.label}</span>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className={cn("text-[11px] font-mono font-bold tracking-widest", isActive ? "text-[#D4AF37]" : "text-white/40 group-hover:text-white/60")}>
+                            {count.toString().padStart(2, '0')}
+                          </span>
                         </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-2">
-                        {isActive && (
-                           <motion.div 
-                             layoutId="activeTabIndicator"
-                             className="w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.5)]"
-                           />
-                        )}
-                        {notificationLevelCount > 0 && !isActive && (
-                          <div className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_#F43F5E]" />
-                        )}
                       </div>
                     </div>
-
-                    {isActive && item.value === 'ARCHIVED' && (
-                      <div className="mt-1.5 ml-4 border-l border-white/5 pl-3 space-y-1 pb-2">
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => setArchivedStatusFilter('ALL')}
-                            className={cn(
-                              "flex-1 text-left px-3 py-1.5 rounded-lg text-[9px] uppercase font-black tracking-[0.1em] transition-colors",
-                              archivedStatusFilter === 'ALL' ? "bg-white/10 text-white" : "text-white/30 hover:text-white/60"
-                            )}
-                          >
-                            All Applications
-                          </button>
-                          {archivedStatusFilter === 'ALL' && boosters.some(b => b.isArchived) && (
-                             <button 
-                               onClick={(e) => { e.stopPropagation(); unarchiveAllByStatus('ALL'); }}
-                               className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500/60 hover:text-emerald-500 transition-all group/restore-btn flex items-center justify-center"
-                               title="Restore ALL archived boosters"
-                             >
-                                <RefreshCw className="w-2.5 h-2.5" />
-                             </button>
-                          )}
-                        </div>
-                        {(Object.keys(STATUS_CONFIG) as Array<keyof typeof STATUS_CONFIG>).map((statusKey) => {
-                          const statusCount = boosters.filter(b => b.isArchived && b.status === statusKey).length;
-                          if (statusCount === 0 && archivedLoaded) return null;
-                          return (
-                            <div key={statusKey} className="flex items-center gap-1.5">
-                              <button
-                                onClick={() => setArchivedStatusFilter(statusKey)}
-                                className={cn(
-                                  "flex-1 text-left px-3 py-1.5 rounded-lg text-[9px] uppercase font-black tracking-[0.1em] transition-colors flex justify-between items-center group/sub",
-                                  archivedStatusFilter === statusKey ? "bg-[#D4AF37]/10 text-[#D4AF37]" : "text-white/30 hover:text-white/60"
-                                )}
-                              >
-                                <span>{STATUS_CONFIG[statusKey].funnelLabel}</span>
-                                <span className="text-[8px] font-mono opacity-50 group-hover/sub:opacity-100">{statusCount}</span>
-                              </button>
-                              {archivedStatusFilter === statusKey && statusCount > 0 && (
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); unarchiveAllByStatus(statusKey); }}
-                                  className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500/60 hover:text-emerald-500 transition-all flex items-center justify-center shrink-0"
-                                  title={`Restore ALL archived in ${STATUS_CONFIG[statusKey].funnelLabel}`}
-                                >
-                                   <RefreshCw className="w-2.5 h-2.5" />
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
+                    {isActive && (
+                       <motion.div 
+                         layoutId="activeTabIndicator"
+                         className="absolute right-3 w-1.5 h-1.5 rounded-full bg-[#D4AF37] shadow-[0_0_10px_rgba(212,175,55,0.5)]"
+                       />
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -3206,135 +2880,6 @@ Added to MasterFile`;
                     <div className="space-y-8">
                       <div className="space-y-4 p-5 rounded-2xl bg-[#0A0A0B] border border-white/5">
                         <div className="flex items-center gap-3 mb-2">
-                           <div className="p-2 rounded-lg bg-indigo-500/10">
-                              <Zap className={cn("w-4 h-4 text-indigo-400", isSyncingLive && "animate-spin")} />
-                           </div>
-                           <div>
-                              <p className="text-[12px] text-white font-black uppercase tracking-widest">Commit Live Pool</p>
-                              <p className="text-[10px] text-white/40 italic">Save current Jotform submissions (Aug 2025+) to database</p>
-                           </div>
-                        </div>
-
-                        {isSyncingLive ? (
-                          <div className="space-y-3 pt-2">
-                            <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                              <motion.div 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
-                                className="h-full bg-indigo-400"
-                              />
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-[9px] font-mono text-indigo-400 uppercase tracking-widest">Processing live pool...</span>
-                              <span className="text-[10px] font-mono text-white/60">{syncProgress.current} / {syncProgress.total}</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <button 
-                            disabled={!selectedForm || selectedForm.startsWith('local_') || !jotformKey}
-                            onClick={async () => {
-                              if (!selectedForm || selectedForm.startsWith('local_')) return;
-                              setIsSyncingLive(true);
-                              setSyncProgress({ current: 0, total: 0 });
-                              try {
-                                const headers = { 'x-jotform-api-key': jotformKey };
-                                let allContent: any[] = [];
-                                for (let offset = 0; offset < 20000; offset += 1000) {
-                                  const resp = await axios.get('/api/jotform-submissions', { 
-                                    params: { formId: selectedForm, limit: 1000, offset },
-                                    headers
-                                  });
-                                  const batch = resp.data.content || [];
-                                  if (batch.length === 0) break;
-                                  allContent = [...allContent, ...batch];
-                                  if (batch.length < 1000) break;
-                                }
-                                
-                                const content = allContent.filter((sub: any) => {
-                                  return new Date(sub.created_at) >= new Date('2025-08-01');
-                                });
-                                
-                                setSyncProgress({ current: 0, total: content.length });
-                                  const batchId = `live_${Date.now()}`;
-                                  let addedCount = 0;
-                                  let skippedCount = 0;
-  
-                                  for (let i = 0; i < content.length; i++) {
-                                    const sub = content[i];
-                                    const sId = String(sub.id);
-                                    
-                                    const exists = await firebaseService.boosterExists(sId);
-                                    if (exists) {
-                                      skippedCount++;
-                                      setSyncProgress(prev => ({ ...prev, current: i + 1 }));
-                                      continue;
-                                    }
-  
-                                    const answers = sub.answers || {};
-                                    const formatAnswer = (ans: any) => {
-                                      if (typeof ans === 'object' && ans !== null) {
-                                        if (ans.other) return String(ans.other);
-                                        return Object.values(ans).filter(v => typeof v === 'string').join(', ');
-                                      }
-                                      return String(ans || '');
-                                    };
-  
-                                    const dynamicFields: Record<string, string> = {};
-                                    Object.values(answers).forEach((a: any) => {
-                                      if (a.text && a.answer !== undefined) {
-                                         dynamicFields[a.text] = formatAnswer(a.answer);
-                                      }
-                                    });
-  
-                                    const getVal = (label: string) => {
-                                        const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
-                                        return entry ? formatAnswer(entry.answer) : '';
-                                    };
-                                    
-                                    await firebaseService.saveBoosterData({
-                                      id: sId,
-                                      formId: selectedForm,
-                                      status: 'WAITING FOR RECRUITMENT',
-                                      notes: '',
-                                      contactStartedOn: null,
-                                      createdAt: sub.created_at || new Date().toISOString(),
-                                      updatedAt: new Date().toISOString(),
-                                      fields: dynamicFields,
-                                      telegram: getVal('Telegram') || getVal('Contact'),
-                                      discord: getVal('Discord'),
-                                      email: getVal('email') || getVal('mail'),
-                                      games: getVal('game') || getVal('What games'),
-                                      workingHours: getVal('How long') || getVal('Working hours'),
-                                      region: getVal('region'),
-                                      syncBatchId: batchId
-                                    });
-                                  
-                                  addedCount++;
-                                  setSyncProgress(prev => ({ ...prev, current: i + 1 }));
-                                }
-                                
-                                await firebaseService.updateSettings({ lastSyncBatchId: batchId });
-                                setLastSyncBatchId(batchId);
-                                setNotification({ 
-                                  message: `Live Pool: ${addedCount} added, ${skippedCount} already in DB.`, 
-                                  type: addedCount > 0 ? 'SUCCESS' : 'INFO' 
-                                });
-                                fetchData();
-                              } catch (err: any) {
-                                setNotification({ message: `Live sync failed: ${err.message}`, type: 'ERROR' });
-                              } finally {
-                                setIsSyncingLive(false);
-                              }
-                            }}
-                            className="w-full py-3.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-white/60 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
-                          >
-                            Execute Live Pull
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="space-y-4 p-5 rounded-2xl bg-[#0A0A0B] border border-white/5">
-                        <div className="flex items-center gap-3 mb-2">
                            <div className="p-2 rounded-lg bg-[#D4AF37]/10">
                               <RefreshCw className={cn("w-4 h-4 text-[#D4AF37]", isSyncingHistorical && "animate-spin")} />
                            </div>
@@ -3365,39 +2910,6 @@ Added to MasterFile`;
                           </div>
                         </div>
 
-                         <div className="grid grid-cols-5 gap-1.5">
-                           <button 
-                             onClick={() => setSyncHistoryRange({ start: '2025-08-01', end: '2025-08-31' })}
-                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
-                           >
-                             Aug 25
-                           </button>
-                           <button 
-                             onClick={() => setSyncHistoryRange({ start: '2025-09-01', end: '2025-09-30' })}
-                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
-                           >
-                             Sep 25
-                           </button>
-                           <button 
-                             onClick={() => setSyncHistoryRange({ start: '2025-10-01', end: '2025-10-31' })}
-                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
-                           >
-                             Oct 25
-                           </button>
-                           <button 
-                             onClick={() => setSyncHistoryRange({ start: '2025-11-01', end: '2025-11-30' })}
-                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
-                           >
-                             Nov 25
-                           </button>
-                           <button 
-                             onClick={() => setSyncHistoryRange({ start: '2025-12-01', end: '2025-12-31' })}
-                             className="py-2 rounded-lg bg-white/5 border border-white/10 text-[7px] font-bold text-white/30 uppercase hover:text-[#D4AF37] hover:border-[#D4AF37]/30 transition-all"
-                           >
-                             Dec 25
-                           </button>
-                        </div>
-
                         {isSyncingHistorical ? (
                           <div className="space-y-3 pt-2">
                             <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
@@ -3426,38 +2938,18 @@ Added to MasterFile`;
                                 });
                                 
                                 const headers = { 'x-jotform-api-key': jotformKey };
-                                let allContent: any[] = [];
-                                for (let offset = 0; offset < 20000; offset += 1000) {
-                                  const resp = await axios.get('/api/jotform-submissions', { 
-                                    params: { formId: selectedForm, filter, limit: 1000, offset },
-                                    headers
-                                  });
-                                  const batch = resp.data.content || [];
-                                  if (batch.length === 0) break;
-                                  allContent = [...allContent, ...batch];
-                                  if (batch.length < 1000) break;
-                                }
+                                const resp = await axios.get('/api/jotform-submissions', { 
+                                  params: { formId: selectedForm, filter, limit: 1000 },
+                                  headers
+                                });
                                 
-                                const content = allContent;
+                                const content = resp.data.content || [];
                                 setSyncProgress({ current: 0, total: content.length });
                                 
-                                const batchId = `sync_${Date.now()}`;
-                                let addedCount = 0;
-                                let skippedCount = 0;
-
                                 // Process in background
                                 for (let i = 0; i < content.length; i++) {
                                   const sub = content[i];
                                   const sId = String(sub.id);
-                                  
-                                  // CRITICAL: Check if exists to avoid overwriting existing data/status
-                                  const exists = await firebaseService.boosterExists(sId);
-                                  if (exists) {
-                                    skippedCount++;
-                                    setSyncProgress(prev => ({ ...prev, current: i + 1 }));
-                                    continue;
-                                  }
-
                                   const answers = sub.answers || {};
                                   
                                   const formatAnswer = (ans: any) => {
@@ -3486,7 +2978,6 @@ Added to MasterFile`;
                                     status: 'WAITING FOR RECRUITMENT',
                                     notes: '',
                                     contactStartedOn: null,
-                                    createdAt: sub.created_at || new Date().toISOString(),
                                     updatedAt: new Date().toISOString(),
                                     fields: dynamicFields,
                                     telegram: getVal('Telegram') || getVal('Contact'),
@@ -3495,21 +2986,12 @@ Added to MasterFile`;
                                     games: getVal('game') || getVal('What games'),
                                     workingHours: getVal('How long') || getVal('Working hours'),
                                     region: getVal('region'),
-                                    syncBatchId: batchId
                                   });
                                   
-                                  addedCount++;
                                   setSyncProgress(prev => ({ ...prev, current: i + 1 }));
                                 }
                                 
-                                // Save the last batch ID for rollback
-                                await firebaseService.updateSettings({ lastSyncBatchId: batchId });
-                                setLastSyncBatchId(batchId);
-
-                                setNotification({ 
-                                  message: `Range Pull: ${addedCount} added, ${skippedCount} already in DB.`, 
-                                  type: addedCount > 0 ? 'SUCCESS' : 'INFO' 
-                                });
+                                setNotification({ message: `Successfully synced ${content.length} historical records`, type: 'SUCCESS' });
                                 fetchData();
                               } catch (err: any) {
                                 setNotification({ message: `Sync failed: ${err.message}`, type: 'ERROR' });
@@ -3522,36 +3004,6 @@ Added to MasterFile`;
                             Execute History Pull
                             {!jotformKey && <span className="block mt-1 text-[8px] text-rose-500 lowercase tracking-normal">Setup API Key first</span>}
                           </button>
-                        )}
-
-                        {lastSyncBatchId && (
-                           <div className="pt-4 border-t border-white/5 space-y-3">
-                              <p className="text-[9px] font-bold text-rose-500 uppercase tracking-widest pl-1">Danger Zone</p>
-                              <button 
-                                onClick={async () => {
-                                  if (!lastSyncBatchId || !confirm('Are you sure you want to rollback the last sync? This will delete all applications added in that session.')) return;
-                                  setIsRollingBack(true);
-                                  try {
-                                    const boosters = await firebaseService.getBoostersByBatch(lastSyncBatchId);
-                                    for (const b of boosters) {
-                                      await firebaseService.deleteBooster(b.id);
-                                    }
-                                    await firebaseService.updateSettings({ lastSyncBatchId: undefined });
-                                    setLastSyncBatchId(undefined);
-                                    setNotification({ message: `Successfully rolled back ${boosters.length} records.`, type: 'SUCCESS' });
-                                    fetchData();
-                                  } catch (err: any) {
-                                    setNotification({ message: `Rollback failed: ${err.message}`, type: 'ERROR' });
-                                  } finally {
-                                    setIsRollingBack(false);
-                                  }
-                                }}
-                                className="w-full py-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10px] font-black uppercase tracking-[0.2em] text-rose-500 hover:bg-rose-500/20 transition-all flex items-center justify-center gap-2"
-                              >
-                                {isRollingBack ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                                Rollback Last Pull
-                              </button>
-                           </div>
                         )}
                       </div>
 
@@ -3723,58 +3175,13 @@ Added to MasterFile`;
                   <Copy className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
                   Clean Pool
                 </button>
-
-                {!['ALL', 'ARCHIVED'].includes(activeTab) && boosters.filter(b => b.status === activeTab && !b.isArchived).length > 0 && (
-                  <button 
-                    onClick={() => archiveAllByStatus(activeTab)}
-                    className="flex items-center gap-2 px-4 py-1.5 ml-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/20 transition-all shadow-sm group/sweep"
-                    title={`Archive ALL ${STATUS_CONFIG[activeTab as keyof typeof STATUS_CONFIG]?.funnelLabel || activeTab} Applications`}
-                  >
-                    <Archive className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
-                    Sweep Status
-                  </button>
-                )}
-                {selectedBoosterIds.size > 0 && (
-                   <div className="flex items-center gap-2 pl-4 ml-4 border-l border-white/10 animate-in fade-in slide-in-from-left-4">
-                      <span className="text-[10px] text-white/40 font-bold uppercase tracking-widest">{selectedBoosterIds.size} Selected</span>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isBulkArchiveConfirming) {
-                            handleBulkArchive(activeTab !== 'ARCHIVED');
-                            setIsBulkArchiveConfirming(false);
-                          } else {
-                            setIsBulkArchiveConfirming(true);
-                          }
-                        }}
-                        className={cn(
-                          "flex items-center gap-2 px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm border",
-                          isBulkArchiveConfirming
-                            ? "bg-rose-500/20 border-rose-500/40 text-rose-400 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]"
-                            : "bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20"
-                        )}
-                      >
-                        {isBulkArchiveConfirming ? <AlertCircle className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-                        {isBulkArchiveConfirming 
-                          ? "Confirm Bulk Update?" 
-                          : (activeTab === 'ARCHIVED' ? 'Restore Selected' : 'Archive Selected')
-                        }
-                      </button>
-                      <button 
-                        onClick={() => setSelectedBoosterIds(new Set())}
-                        className="p-1.5 rounded-full hover:bg-white/5 text-white/40 hover:text-white transition-all"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                   </div>
-                )}
               </div>
             </div>
           </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2 bg-[#141416] border border-[#2D2D30] rounded-xl px-3 py-1.5 shadow-inner">
                 <span className="text-[9px] text-white/40 uppercase font-bold tracking-wider">Show:</span>
-                {[10, 50, 100, 250, 500, 1000, 2000, 0].map(size => (
+                {[10, 50, 0].map(size => (
                   <button
                     key={size}
                     onClick={() => setPageSize(size)}
@@ -3897,43 +3304,79 @@ Added to MasterFile`;
                   {(() => {
                     const rows = filteredBoosters.slice(
                       pageSize === 0 ? 0 : (currentPage - 1) * pageSize, 
-                      pageSize === 0 ? Math.min(filteredBoosters.length, 500) : currentPage * pageSize
+                      pageSize === 0 ? filteredBoosters.length : currentPage * pageSize
                     );
 
-                    return rows.map((booster) => {
-                      const level = getNotificationLevel(booster);
-                      const statusConfig = STATUS_CONFIG[booster.status];
-                      return (
-                        <BoosterRow
-                          key={booster.id}
-                          booster={booster}
-                          isSelected={selectedBoosterIds.has(booster.id)}
-                          level={level}
-                          statusConfig={statusConfig}
-                          activeTab={activeTab}
-                          dynamicColumns={dynamicColumns}
-                          archiveConfirmationId={archiveConfirmationId}
-                          copiedId={copiedId}
-                          onToggleSelection={toggleBoosterSelection}
-                          onToggleArchive={toggleArchive}
-                          onSetArchiveConfirm={setArchiveConfirmationId}
-                          onView={setViewingBooster}
-                          onEditCell={setEditingCell}
-                          onUpdateContactStart={updateContactStart}
-                          onUpdateStatus={updateStatus}
-                          onCopyMaster={copyMasterInfo}
-                          onMarkChecked={onMarkChecked}
-                        />
-                      );
-                    });
+                    // Disable animations for performance when viewing all
+                    if (pageSize === 0) {
+                      return rows.map((booster) => {
+                        const level = getNotificationLevel(booster);
+                        const statusConfig = STATUS_CONFIG[booster.status];
+                        return (
+                          <tr
+                            key={booster.id}
+                            className={cn(
+                              "group hover:bg-white/[0.02] transition-colors relative",
+                              selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
+                            )}
+                          >
+                            <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
+                              <div 
+                                onClick={() => toggleBoosterSelection(booster.id)}
+                                className={cn(
+                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+                                  selectedBoosterIds.has(booster.id) 
+                                    ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
+                                    : "border-white/10 group-hover:border-[#D4AF37]/40"
+                                )}
+                              >
+                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
+                              </div>
+                            </td>
+                            {renderRowCells(booster, level, statusConfig)}
+                          </tr>
+                        );
+                      });
+                    }
+
+                    return (
+                      <AnimatePresence mode="popLayout" initial={false}>
+                        {rows.map((booster) => {
+                          const level = getNotificationLevel(booster);
+                          const statusConfig = STATUS_CONFIG[booster.status];
+                          return (
+                            <motion.tr
+                              key={booster.id}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              className={cn(
+                                "group hover:bg-white/[0.02] transition-colors relative",
+                                selectedBoosterIds.has(booster.id) && "bg-[#D4AF37]/5"
+                              )}
+                            >
+                               <td className="sticky left-0 z-10 bg-[#0A0A0B]/95 group-hover:bg-[#1A1A1C] px-3 py-2 border-b border-white/5 transition-colors">
+                              <div 
+                                onClick={() => toggleBoosterSelection(booster.id)}
+                                className={cn(
+                                  "w-4 h-4 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+                                  selectedBoosterIds.has(booster.id) 
+                                    ? "bg-[#D4AF37] border-[#D4AF37] text-black shadow-[0_0_15px_rgba(212,175,55,0.3)] scale-110" 
+                                    : "border-white/10 group-hover:border-[#D4AF37]/40"
+                                )}
+                              >
+                                {selectedBoosterIds.has(booster.id) && <Check className="w-3 h-3 stroke-[3]" />}
+                              </div>
+                            </td>
+                            {renderRowCells(booster, level, statusConfig)}
+                            </motion.tr>
+                          );
+                        })}
+                      </AnimatePresence>
+                    );
                   })()}
                 </tbody>
               </table>
-              {pageSize === 0 && filteredBoosters.length > 500 && (
-                <div className="p-12 text-center border-t border-white/5 bg-[#141416]/50">
-                  <p className="text-white/40 text-[11px] uppercase tracking-[0.2em] font-black">Showing first 500 records. Switch pagination for more.</p>
-                </div>
-              )}
             </div>
 
             {pageSize > 0 && filteredBoosters.length > pageSize && (
@@ -4188,23 +3631,10 @@ Added to MasterFile`;
                       />
                     ) : editingCell.field === 'games' ? (
                       <div className="space-y-4">
-                         <div className="relative">
-                           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30" />
-                           <input 
-                             type="text"
-                             autoFocus
-                             placeholder="Search games..."
-                             className="w-full bg-[#0A0A0B] border border-[#2D2D30] rounded-xl pl-9 pr-4 py-2.5 text-[11px] text-white outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20 transition-all font-mono"
-                             value={gameEditorSearch}
-                             onChange={(e) => setGameEditorSearch(e.target.value)}
-                           />
-                         </div>
-                         <div className="space-y-2 max-h-[250px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
-                            {mergedAvailableGames.filter(g => g.toLowerCase().includes(gameEditorSearch.toLowerCase())).length > 0 ? (
+                         <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10">
+                            {availableGames.length > 0 ? (
                               <div className="grid grid-cols-1 gap-1.5">
-                                {mergedAvailableGames
-                                  .filter(g => g.toLowerCase().includes(gameEditorSearch.toLowerCase()))
-                                  .map((game, i) => {
+                                {[...availableGames].sort((a, b) => a.localeCompare(b)).map((game, i) => {
                                   const currentGames = editingCell.value.split(/[,;]+/).map(g => g.trim()).filter(Boolean);
                                   const isSelected = currentGames.includes(game);
                                   return (
@@ -4217,19 +3647,19 @@ Added to MasterFile`;
                                         setEditingCell({ ...editingCell, value: newGames.join(', ') });
                                       }}
                                       className={cn(
-                                        "flex items-center gap-3 p-2 rounded-xl border cursor-pointer transition-all",
+                                        "flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition-all",
                                         isSelected 
                                           ? "bg-[#D4AF37]/10 border-[#D4AF37]/40 text-[#D4AF37]" 
                                           : "bg-white/5 border-white/10 text-white/40 hover:bg-white/10"
                                       )}
                                     >
                                       <div className={cn(
-                                        "w-3.5 h-3.5 rounded border flex items-center justify-center transition-all",
+                                        "w-4 h-4 rounded border flex items-center justify-center transition-all",
                                         isSelected ? "bg-[#D4AF37] border-[#D4AF37] text-black" : "border-white/20"
                                       )}>
-                                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                                       </div>
-                                      <span className="text-[10px] font-bold uppercase tracking-widest">{game}</span>
+                                      <span className="text-[11px] font-bold uppercase tracking-widest">{game}</span>
                                     </div>
                                   );
                                 })}

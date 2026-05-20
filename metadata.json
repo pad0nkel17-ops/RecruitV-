@@ -1,8 +1,5 @@
 {
   "name": "Recruitment Based",
-  "description": "Professional recruitment management system with automated duplication detection, CRM integration, and global dashboard.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "description": "Booster Recruitment Database",
+  "requestFramePermissions": []
 }

@@ -9,11 +9,11 @@ export default async (req: any, res: any) => {
     let response;
     try {
       response = await axios.get(`https://eu-api.jotform.com/form/${formId}/submissions`, { 
-        params: { apiKey, limit: 2000 } 
+        params: { apiKey, limit: 1000 } 
       });
     } catch (e) {
       response = await axios.get(`https://api.jotform.com/form/${formId}/submissions`, { 
-        params: { apiKey, limit: 2000 } 
+        params: { apiKey, limit: 1000 } 
       });
     }
     res.json(response.data);

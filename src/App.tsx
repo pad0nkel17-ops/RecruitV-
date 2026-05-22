@@ -48,6 +48,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { firebaseService, type BoosterData, type Settings as AppSettings, type Form as AppForm } from './services/firebaseService';
 import { LogViewModal } from './components/LogViewModal';
+import { splitTags } from './lib/tagUtils';
 
 let config: any = { projectId: 'Firebase' };
 try {
@@ -95,7 +96,7 @@ const CellContent = ({ val, col }: { val: any, col: string }) => {
   if (!val || val === '—') return <span className="text-white/40 italic">—</span>;
   
   // Split into parts for potential multi-block rendering
-  const parts = val.toString().split(/[,;]+/).map((p: string) => p.trim()).filter(Boolean);
+  const parts = splitTags(val);
   
   const shouldTruncate = parts.length > 10;
   const displayParts = (shouldTruncate && !expanded) ? parts.slice(0, 10) : parts;
@@ -1192,8 +1193,19 @@ export default function App() {
           
           const formatAnswer = (ans: any) => {
             if (typeof ans === 'object' && ans !== null) {
-              if (ans.other) return String(ans.other);
-              return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+              const parts: string[] = [];
+              Object.entries(ans).forEach(([key, val]) => {
+                if (key !== 'other' && typeof val === 'string') {
+                  parts.push(val);
+                }
+              });
+              if (ans.other && typeof ans.other === 'string') {
+                parts.push(ans.other);
+              }
+              if (parts.length === 0) {
+                return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+              }
+              return parts.join(', ');
             }
             return String(ans || '');
           };
@@ -2071,9 +2083,8 @@ Added to MasterFile`;
     const games = new Set<string>();
     boosters.forEach(b => {
       if (b.games) {
-        b.games.split(/[,;|]+/).forEach(g => {
-          const trimmed = g.trim();
-          if (trimmed) games.add(trimmed);
+        splitTags(b.games).forEach(g => {
+          games.add(g);
         });
       }
     });
@@ -2954,8 +2965,19 @@ Added to MasterFile`;
                                   
                                   const formatAnswer = (ans: any) => {
                                     if (typeof ans === 'object' && ans !== null) {
-                                      if (ans.other) return String(ans.other);
-                                      return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                      const parts: string[] = [];
+                                      Object.entries(ans).forEach(([key, val]) => {
+                                        if (key !== 'other' && typeof val === 'string') {
+                                          parts.push(val);
+                                        }
+                                      });
+                                      if (ans.other && typeof ans.other === 'string') {
+                                        parts.push(ans.other);
+                                      }
+                                      if (parts.length === 0) {
+                                        return Object.values(ans).filter(v => typeof v === 'string').join(', ');
+                                      }
+                                      return parts.join(', ');
                                     }
                                     return String(ans || '');
                                   };
@@ -3635,7 +3657,7 @@ Added to MasterFile`;
                             {availableGames.length > 0 ? (
                               <div className="grid grid-cols-1 gap-1.5">
                                 {[...availableGames].sort((a, b) => a.localeCompare(b)).map((game, i) => {
-                                  const currentGames = editingCell.value.split(/[,;]+/).map(g => g.trim()).filter(Boolean);
+                                  const currentGames = splitTags(editingCell.value);
                                   const isSelected = currentGames.includes(game);
                                   return (
                                     <div 

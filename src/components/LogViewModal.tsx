@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Database, Terminal, Clock, Shield } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { splitTags } from '../lib/tagUtils';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -29,7 +30,7 @@ const Section = ({ title, children }: { title: string; children?: React.ReactNod
 
 const TagValue = ({ value }: { value: string }) => {
   if (!value || value === '—') return null;
-  const parts = value.split(/[,;]+/).map(p => p.trim()).filter(Boolean);
+  const parts = splitTags(value);
   
   return (
     <>

@@ -576,6 +576,7 @@ export default function App() {
   const [configStatus, setConfigStatus] = useState<string>('ALL');
   const [columnRenames, setColumnRenames] = useState<Record<string, string>>({});
   const [jotformKey, setJotformKey] = useState('');
+  const [initLoaded, setInitLoaded] = useState(false);
   const [availableGames, setAvailableGames] = useState<string[]>([]);
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: string; field: string; value: string } | null>(null);
@@ -823,10 +824,12 @@ export default function App() {
         setError(jotformError || 'No forms found. Connect a Jotform account or create a local database.');
         setLoading(false);
       }
+      setInitLoaded(true);
     } catch (err: any) {
       console.error('Failed to fetch forms', err);
       setError('System could not initialize forms. Please verify your environment variables.');
       setLoading(false);
+      setInitLoaded(true);
     }
   };
 
@@ -1420,9 +1423,11 @@ export default function App() {
         setBoosters(JSON.parse(cached));
         setLoading(false);
       }
-      fetchData(selectedForm);
+      if (initLoaded) {
+        fetchData(selectedForm);
+      }
     }
-  }, [selectedForm]);
+  }, [selectedForm, initLoaded]);
 
   const [crmPrompt, setCrmPrompt] = useState<{ ids: string[]; status: Booster['status'] } | null>(null);
   const [tempCrmName, setTempCrmName] = useState('');

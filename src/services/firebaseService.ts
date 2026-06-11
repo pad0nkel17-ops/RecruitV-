@@ -101,6 +101,11 @@ export const firebaseService = {
     return snapshot.docs.map(d => d.data() as BoosterData);
   },
 
+  async getSingleBoosterData(id: string): Promise<BoosterData | null> {
+    const sDoc = await getDoc(doc(db, BOOSTER_DATA_COL, id));
+    return sDoc.exists() ? sDoc.data() as BoosterData : null;
+  },
+
   async saveBoosterData(data: BoosterData) {
     const ref = doc(db, BOOSTER_DATA_COL, data.id);
     const snap = await getDoc(ref);
@@ -109,20 +114,20 @@ export const firebaseService = {
       const merged: BoosterData = {
         ...existing,
         ...data,
-        status: existing.status || data.status || 'WAITING FOR RECRUITMENT',
-        notes: existing.notes || data.notes || '',
-        contactStartedOn: existing.contactStartedOn !== undefined && existing.contactStartedOn !== null ? existing.contactStartedOn : (data.contactStartedOn || null),
+        status: data.status || existing.status || 'WAITING FOR RECRUITMENT',
+        notes: data.notes !== undefined ? data.notes : (existing.notes || ''),
+        contactStartedOn: data.contactStartedOn !== undefined && data.contactStartedOn !== null ? data.contactStartedOn : (existing.contactStartedOn || null),
         fieldOverrides: { ...(existing.fieldOverrides || {}), ...(data.fieldOverrides || {}) },
-        statusHistory: existing.statusHistory || data.statusHistory || [],
-        crmAccount: existing.crmAccount || data.crmAccount || '',
-        lastStatusCheckedAt: existing.lastStatusCheckedAt || data.lastStatusCheckedAt || undefined,
-        statusUpdatedAt: existing.statusUpdatedAt || data.statusUpdatedAt || undefined,
-        discord: existing.discord || data.discord || '',
-        telegram: existing.telegram || data.telegram || '',
-        email: existing.email || data.email || '',
-        games: existing.games || data.games || '',
-        workingHours: existing.workingHours || data.workingHours || '',
-        region: existing.region || data.region || '',
+        statusHistory: data.statusHistory || existing.statusHistory || [],
+        crmAccount: data.crmAccount !== undefined ? data.crmAccount : (existing.crmAccount || ''),
+        lastStatusCheckedAt: data.lastStatusCheckedAt !== undefined ? data.lastStatusCheckedAt : (existing.lastStatusCheckedAt || undefined),
+        statusUpdatedAt: data.statusUpdatedAt !== undefined ? data.statusUpdatedAt : (existing.statusUpdatedAt || undefined),
+        discord: data.discord !== undefined ? data.discord : (existing.discord || ''),
+        telegram: data.telegram !== undefined ? data.telegram : (existing.telegram || ''),
+        email: data.email !== undefined ? data.email : (existing.email || ''),
+        games: data.games !== undefined ? data.games : (existing.games || ''),
+        workingHours: data.workingHours !== undefined ? data.workingHours : (existing.workingHours || ''),
+        region: data.region !== undefined ? data.region : (existing.region || ''),
         fields: { ...(existing.fields || {}), ...(data.fields || {}) }
       };
       await setDoc(ref, merged);

@@ -963,8 +963,10 @@ export default function App() {
   const updateBoosterField = async (id: string, field: string, value: string) => {
     const sId = String(id);
     try {
-      const bData = await firebaseService.getBoosterData(selectedForm);
-      const existing = bData.find(d => String(d.id) === sId);
+      const targetBooster = boosters.find(b => String(b.id) === sId);
+      const boosterFormId = targetBooster?.formId || selectedForm;
+
+      const existing = await firebaseService.getSingleBoosterData(sId);
       const now = new Date().toISOString();
       
       const trimmedValue = field === 'crmAccount' ? value.trim() : value;
@@ -973,7 +975,7 @@ export default function App() {
       
       // Special handling if someone is editing status field directly (if exposed)
       if (field.toLowerCase() === 'status') {
-         await firebaseService.updateBoosterStatus(sId, selectedForm, trimmedValue);
+         await firebaseService.updateBoosterStatus(sId, boosterFormId, trimmedValue);
       } else {
         const newEntry: BoosterData = existing ? {
           ...existing,
@@ -982,7 +984,7 @@ export default function App() {
           ...(isCoreField ? { [field]: trimmedValue } : {})
         } : {
           id: sId,
-          formId: selectedForm,
+          formId: boosterFormId,
           status: 'WAITING FOR RECRUITMENT',
           notes: '',
           contactStartedOn: null,
@@ -1008,7 +1010,7 @@ export default function App() {
       }));
       setEditingCell(null);
     } catch (err) {
-      console.error('Failed to update field');
+      console.error('Failed to update field', err);
     }
   };
 

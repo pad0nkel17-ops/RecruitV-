@@ -102,7 +102,33 @@ export const firebaseService = {
   },
 
   async saveBoosterData(data: BoosterData) {
-    await setDoc(doc(db, BOOSTER_DATA_COL, data.id), data);
+    const ref = doc(db, BOOSTER_DATA_COL, data.id);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const existing = snap.data() as BoosterData;
+      const merged: BoosterData = {
+        ...existing,
+        ...data,
+        status: existing.status || data.status || 'WAITING FOR RECRUITMENT',
+        notes: existing.notes || data.notes || '',
+        contactStartedOn: existing.contactStartedOn !== undefined && existing.contactStartedOn !== null ? existing.contactStartedOn : (data.contactStartedOn || null),
+        fieldOverrides: { ...(existing.fieldOverrides || {}), ...(data.fieldOverrides || {}) },
+        statusHistory: existing.statusHistory || data.statusHistory || [],
+        crmAccount: existing.crmAccount || data.crmAccount || '',
+        lastStatusCheckedAt: existing.lastStatusCheckedAt || data.lastStatusCheckedAt || undefined,
+        statusUpdatedAt: existing.statusUpdatedAt || data.statusUpdatedAt || undefined,
+        discord: existing.discord || data.discord || '',
+        telegram: existing.telegram || data.telegram || '',
+        email: existing.email || data.email || '',
+        games: existing.games || data.games || '',
+        workingHours: existing.workingHours || data.workingHours || '',
+        region: existing.region || data.region || '',
+        fields: { ...(existing.fields || {}), ...(data.fields || {}) }
+      };
+      await setDoc(ref, merged);
+    } else {
+      await setDoc(ref, data);
+    }
   },
 
   async markStatusChecked(id: string) {
@@ -162,6 +188,10 @@ export const firebaseService = {
       
       const lastEntry = history[history.length - 1];
       const shouldAddNewHistory = !lastEntry || lastEntry.status !== status;
+
+      if (trimmedCrm === undefined && currentData.crmAccount) {
+        historyEntry.crmAccount = currentData.crmAccount;
+      }
 
       const updates: any = { 
         updatedAt: now,

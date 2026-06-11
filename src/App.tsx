@@ -1160,7 +1160,7 @@ export default function App() {
       if (idToFetch.startsWith('local_')) {
         // Local form data is entirely in Firebase
         merged = fbData.map(d => {
-          const fields = d.fields || {};
+          const fields = { ...(d.fields || {}), ...(d.fieldOverrides || {}) };
           const getFVal = (keys: string[]) => {
             const foundKey = Object.keys(fields).find(k => 
               keys.some(ki => k.toLowerCase().includes(ki.toLowerCase()))
@@ -1213,20 +1213,56 @@ export default function App() {
             return String(ans || '');
           };
 
-          const dynamicFields: Record<string, string> = {};
-          Object.values(answers).forEach((a: any) => {
-            if (a.text && a.answer !== undefined) {
-               dynamicFields[a.text] = persist?.fieldOverrides?.[a.text] !== undefined 
-                ? persist.fieldOverrides[a.text] 
-                : formatAnswer(a.answer);
-            }
-          });
-
           const getVal = (label: string) => {
-              if (persist?.fieldOverrides?.[label] !== undefined) return persist.fieldOverrides[label];
+              // 1. Check if we have an exactly matching override
+              if (persist?.fieldOverrides?.[label] !== undefined) {
+                return persist.fieldOverrides[label];
+              }
+
+              // 2. See if there is any override key matching case-insensitively
+              if (persist?.fieldOverrides) {
+                const foundKey = Object.keys(persist.fieldOverrides).find(
+                  k => k.toLowerCase() === label.toLowerCase()
+                );
+                if (foundKey !== undefined && persist.fieldOverrides[foundKey] !== undefined) {
+                  return persist.fieldOverrides[foundKey];
+                }
+              }
+
+              // 3. See if we have a core field direct root match or case-insensitive keyword override
+              if (persist) {
+                const labelLower = label.toLowerCase();
+                if (labelLower.includes('discord') && persist.discord !== undefined && persist.discord !== '') {
+                  return persist.discord;
+                }
+                if ((labelLower.includes('telegram') || labelLower.includes('contact')) && persist.telegram !== undefined && persist.telegram !== '') {
+                  return persist.telegram;
+                }
+                if ((labelLower.includes('email') || labelLower.includes('mail')) && persist.email !== undefined && persist.email !== '') {
+                  return persist.email;
+                }
+                if ((labelLower.includes('game') || labelLower.includes('skills') || labelLower.includes('portfolio')) && persist.games !== undefined && persist.games !== '') {
+                  return persist.games;
+                }
+                if ((labelLower.includes('hour') || labelLower.includes('time') || labelLower.includes('how long')) && persist.workingHours !== undefined && persist.workingHours !== '') {
+                  return persist.workingHours;
+                }
+                if (labelLower.includes('region') && persist.region !== undefined && persist.region !== '') {
+                  return persist.region;
+                }
+              }
+
+              // 4. Fallback to Jotform's original value
               const entry: any = Object.values(answers).find((a: any) => a.text?.toLowerCase().includes(label.toLowerCase()));
               return entry ? formatAnswer(entry.answer) : '';
           };
+
+          const dynamicFields: Record<string, string> = {};
+          Object.values(answers).forEach((a: any) => {
+            if (a.text && a.answer !== undefined) {
+               dynamicFields[a.text] = getVal(a.text);
+            }
+          });
 
           return enhanceBooster({
             id: sId,
@@ -1434,10 +1470,19 @@ export default function App() {
 
   const updateStatus = async (id: string, status: Booster['status'], crmAccount?: string) => {
     const sId = String(id);
-    if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
-      setCrmPrompt({ ids: [sId], status });
-      setTempCrmName('');
-      return;
+    const foundBooster = boosters.find(b => String(b.id) === sId);
+    const existingCrm = foundBooster?.crmAccount?.trim() || '';
+
+    if (status === 'CRM ACCOUNT GIVEN') {
+      if (!crmAccount) {
+        if (existingCrm) {
+          crmAccount = existingCrm;
+        } else {
+          setCrmPrompt({ ids: [sId], status });
+          setTempCrmName('');
+          return;
+        }
+      }
     }
     try {
       await firebaseService.updateBoosterStatus(sId, selectedForm, status, undefined, crmAccount);
@@ -1448,8 +1493,9 @@ export default function App() {
         if (String(b.id) !== sId) return b;
         
         const historyEntry: any = { status, timestamp: new Date().toISOString() };
-        const trimmedCrm = crmAccount?.trim();
-        if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
+        const bCrm = crmAccount !== undefined ? crmAccount : (b.crmAccount || '');
+        const trimmedCrm = bCrm.trim();
+        if (trimmedCrm) historyEntry.crmAccount = trimmedCrm;
 
         return enhanceBooster({ 
           ...b, 
@@ -1485,23 +1531,32 @@ export default function App() {
 
   const bulkUpdateStatus = async (status: Booster['status'], crmAccount?: string) => {
     if (selectedBoosterIds.size === 0 || !selectedForm) return;
-    
-    if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
-      setCrmPrompt({ ids: Array.from(selectedBoosterIds).map(id => String(id)), status });
-      setTempCrmName('');
+
+    const sIds = Array.from(selectedBoosterIds)
+      .map(id => String(id))
+      .filter(id => id && id !== 'undefined' && id !== 'null');
+      
+    if (sIds.length === 0) {
+      console.warn('No valid IDs selected for bulk update');
       return;
+    }
+
+    if (status === 'CRM ACCOUNT GIVEN' && !crmAccount) {
+      const boostersMap = new Map<string, Booster>(boosters.map(b => [String(b.id), b]));
+      const sIdsWithoutCrm = sIds.filter(id => {
+        const b = boostersMap.get(id);
+        return !(b?.crmAccount?.trim());
+      });
+
+      if (sIdsWithoutCrm.length > 0) {
+        setCrmPrompt({ ids: sIds, status });
+        setTempCrmName('');
+        return;
+      }
     }
 
     try {
       setRefreshing(true);
-      const sIds = Array.from(selectedBoosterIds)
-        .map(id => String(id))
-        .filter(id => id && id !== 'undefined' && id !== 'null');
-      
-      if (sIds.length === 0) {
-        console.warn('No valid IDs selected for bulk update');
-        return;
-      }
 
       await Promise.all(
         sIds.map(id => firebaseService.updateBoosterStatus(id, selectedForm, status, undefined, crmAccount))
@@ -1513,8 +1568,9 @@ export default function App() {
         if (!sIds.includes(String(b.id))) return b;
 
         const historyEntry: any = { status, timestamp: new Date().toISOString() };
-        const trimmedCrm = crmAccount?.trim();
-        if (trimmedCrm !== undefined) historyEntry.crmAccount = trimmedCrm;
+        const bCrm = crmAccount !== undefined ? crmAccount : (b.crmAccount || '');
+        const trimmedCrm = bCrm.trim();
+        if (trimmedCrm) historyEntry.crmAccount = trimmedCrm;
 
         return enhanceBooster({
           ...b,

@@ -2252,7 +2252,19 @@ Added to MasterFile`;
             className="flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform"
             onClick={() => { setDashboardMode(true); setSelectedForm(''); }}
           >
-            <Shield className="w-6 h-6 shadow-[0_0_15px_rgba(212,175,55,0.3)] text-[#D4AF37]" />
+            <svg 
+              className="w-6 h-6 shrink-0 filter drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="#10B981" 
+              strokeWidth="2.5" 
+              strokeLinecap="round" 
+              strokeLinejoin="round"
+            >
+              <path d="M4 8l8-5 8 5" />
+              <path d="M4 14l8-5 8 5" />
+              <path d="M4 19h16" />
+            </svg>
             Recruitment Based
           </div>
           <div className="flex items-center gap-3">
